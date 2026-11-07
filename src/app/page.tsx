@@ -32,6 +32,11 @@ export default function Home() {
       title="Life is a Banana: The Cosmic Slip"
       className="fixed inset-0 z-50 h-screen w-screen border-0 bg-black"
       allow="autoplay; fullscreen; gamepad"
+      // Browser extensions (screenshotners, translators...) inject bis_* /
+      // __processed_* attributes into the DOM before React hydrates, which
+      // triggers a harmless-but-noisy hydration mismatch warning. Suppress it
+      // on this leaf node — the game itself lives in a plain iframe.
+      suppressHydrationWarning
     />
   );
 }

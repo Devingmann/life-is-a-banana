@@ -1,0 +1,809 @@
+     1→     1→import * as THREE from 'three';
+     2→     2→import * as CANNON from 'cannon-es';
+     3→     3→import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+     4→     4→
+     5→     5→/**
+     6→     6→ * Environment
+     7→     7→ * -----------
+     8→     8→ * Procedural chunk manager for the infinite "Highway of Life".
+     9→     9→ *  - Recycled 50-unit road chunks with neon edges, void gaps & warning strips
+    10→    10→ *  - Obstacles: Monkeys, Gorilla Bosses, Electric Toasters, the Giant Blender
+    11→    11→ *    of Fate — all merged single-draw-call meshes with cannon hitboxes
+    12→    12→ *  - Potassium stars (distance-collected + magnetized in Super Yellow Mode)
+    13→    13→ *  - Banana-peel slip traps (thin physics triggers → chaotic friction loss)
+    14→    14→ *  - Cyber-tropical scenery: neon palms, floating banana moons, neon arches,
+    15→    15→ *    synthwave grid floor, striped sun, starfield
+    16→    16→ */
+    17→    17→
+    18→    18→const CHUNK_LEN = 50;
+    19→    19→const CHUNK_COUNT = 10;
+    20→    20→const ROAD_W = 14;
+    21→    21→const START_Z = 20;
+    22→    22→
+    23→    23→const COL = {
+    24→    24→  banana: 0xffe135, magenta: 0xff2e92, pink: 0xff6ec7, teal: 0x00ffa3,
+    25→    25→  gold: 0xffd24a, purple: 0x9b5de5, trunk: 0x241338, frond: 0x0d6b4f,
+    26→    26→};
+    27→    27→
+    28→    28→/* ---------- tiny geometry helper: tint + transform + merge ---------- */
+    29→    29→const _m4 = new THREE.Matrix4();
+    30→    30→const _q = new THREE.Quaternion();
+    31→    31→const _e = new THREE.Euler();
+    32→    32→const _v = new THREE.Vector3();
+    33→    33→const _s = new THREE.Vector3();
+    34→    34→
+    35→    35→function part(geoSrc, hex, pos = [0, 0, 0], rot = [0, 0, 0], scl = [1, 1, 1]) {
+    36→    36→  const g = geoSrc.clone();
+    37→    37→  _e.set(rot[0], rot[1], rot[2]);
+    38→    38→  _q.setFromEuler(_e);
+    39→    39→  _v.set(pos[0], pos[1], pos[2]);
+    40→    40→  _s.set(scl[0], scl[1], scl[2]);
+    41→    41→  _m4.compose(_v, _q, _s);
+    42→    42→  g.applyMatrix4(_m4);
+    43→    43→  const n = g.attributes.position.count;
+    44→    44→  const c = new THREE.Color(hex);
+    45→    45→  const arr = new Float32Array(n * 3);
+    46→    46→  for (let i = 0; i < n; i++) { arr[i * 3] = c.r; arr[i * 3 + 1] = c.g; arr[i * 3 + 2] = c.b; }
+    47→    47→  g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+    48→    48→  return g;
+    49→    49→}
+    50→    50→
+    51→    51→export class Environment {
+    52→    52→  /**
+    53→    53→   * @param {THREE.Scene} scene
+    54→    54→   * @param {import('./PhysicsWorld.js').PhysicsWorld} physics
+    55→    55→   * @param {THREE.Group} bananaTemplate from AssetManager (for banana moons)
+    56→    56→   */
+    57→    57→  constructor(scene, physics, bananaTemplate) {
+    58→    58→    this.scene = scene;
+    59→    59→    this.physics = physics;
+    60→    60→    this.chunks = [];
+    61→    61→    this.chunkIndex = 0;
+    62→    62→    this.nextZ = START_Z;
+    63→    63→    this.time = 0;
+    64→    64→
+    65→    65→    this.group = new THREE.Group();
+    66→    66→    scene.add(this.group);
+    67→    67→
+    68→    68→    this._buildSharedAssets(bananaTemplate);
+    69→    69→    this._buildSky();
+    70→    70→
+    71→    71→    for (let i = 0; i < CHUNK_COUNT; i++) {
+    72→    72→      const chunk = { group: new THREE.Group(), zEnd: 0, allBodies: [], obstacles: [], stars: [], anims: [], gapSpan: null, disposables: [] };
+    73→    73→      this.group.add(chunk.group);
+    74→    74→      this.chunks.push(chunk);
+    75→    75→    }
+    76→    76→    this.reset();
+    77→    77→  }
+    78→    78→
+    79→    79→  /* ================================================================
+    80→    80→     SHARED ASSETS (built once)
+    81→    81→     ================================================================ */
+    82→    82→
+    83→    83→  _buildSharedAssets(bananaTemplate) {
+    84→    84→    // --- road ---
+    85→    85→    this.roadTex = this._makeRoadTexture();
+    86→    86→    this.matRoad = new THREE.MeshStandardMaterial({ map: this.roadTex, roughness: 0.85, metalness: 0.15 });
+    87→    87→    this.matEdge = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 0.85, roughness: 0.4 });
+    88→    88→    this.geoEdge = new THREE.BoxGeometry(1, 1, 1); // scaled per segment
+    89→    89→    this.matWarn = new THREE.MeshStandardMaterial({ color: 0xff6a00, emissive: 0xff4d00, emissiveIntensity: 1.2 });
+    90→    90→    this.geoWarn = new THREE.BoxGeometry(ROAD_W, 0.09, 0.8);
+    91→    91→
+    92→    92→    // --- flat colored material for merged meshes ---
+    93→    93→    this.matFlat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75, metalness: 0.1 });
+    94→    94→    this.matChrome = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.25, metalness: 0.9 });
+    95→    95→
+    96→    96→    // --- potassium star ---
+    97→    97→    this.geoStar = this._makeStarGeometry();
+    98→    98→    this.matStar = new THREE.MeshStandardMaterial({
+    99→    99→      color: COL.gold, emissive: COL.gold, emissiveIntensity: 1.0,
+   100→   100→      roughness: 0.3, metalness: 0.7,
+   101→   101→    });
+   102→   102→
+   103→   103→    // --- neon palm (silhouette + teal fronds + pink rings) ---
+   104→   104→    this._buildPalm();
+   105→   105→
+   106→   106→    // --- obstacles ---
+   107→   107→    this._buildMonkey();
+   108→   108→    this._buildGorilla();
+   109→   109→    this._buildToaster();
+   110→   110→    this._buildBlender();
+   111→   111→
+   112→   112→    // --- slip-zone peel bits ---
+   113→   113→    this.geoPeel = new THREE.BoxGeometry(0.55, 0.1, 1.05);
+   114→   114→    this.matPeel = new THREE.MeshStandardMaterial({ color: COL.banana, emissive: 0xcaa500, emissiveIntensity: 0.22, roughness: 0.5 });
+   115→   115→
+   116→   116→    // --- banana moons ---
+   117→   117→    this.moonMat = new THREE.MeshStandardMaterial({ color: 0xffdf6b, emissive: 0xffca28, emissiveIntensity: 0.8, roughness: 0.5 });
+   118→   118→    this.moonTemplate = bananaTemplate ? bananaTemplate.clone(true) : null;
+   119→   119→    if (this.moonTemplate) {
+   120→   120→      this.moonTemplate.traverse((o) => {
+   121→   121→        if (o.isMesh) { o.material = this.moonMat; o.castShadow = false; }
+   122→   122→      });
+   123→   123→    }
+   124→   124→
+   125→   125→    // --- neon arch ---
+   126→   126→    this.geoArch = new THREE.TorusGeometry(8.4, 0.3, 10, 42);
+   127→   127→    this.matArchPink = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 0.9, roughness: 0.4 });
+   128→   128→    this.matArchTeal = new THREE.MeshStandardMaterial({ color: COL.teal, emissive: COL.teal, emissiveIntensity: 0.8, roughness: 0.4 });
+   129→   129→
+   130→   130→    // --- grid floor ---
+   131→   131→    this.gridTex = this._makeGridTexture();
+   132→   132→    this.matGrid = new THREE.MeshBasicMaterial({ map: this.gridTex });
+   133→   133→    this.grid = new THREE.Mesh(new THREE.PlaneGeometry(420, 420), this.matGrid);
+   134→   134→    this.grid.rotation.x = -Math.PI / 2;
+   135→   135→    this.grid.position.y = -7;
+   136→   136→    this.scene.add(this.grid);
+   137→   137→  }
+   138→   138→
+   139→   139→  _makeRoadTexture() {
+   140→   140→    const c = document.createElement('canvas');
+   141→   141→    c.width = 256; c.height = 512;
+   142→   142→    const ctx = c.getContext('2d');
+   143→   143→    ctx.fillStyle = '#171029';
+   144→   144→    ctx.fillRect(0, 0, 256, 512);
+   145→   145→    for (let i = 0; i < 1100; i++) {
+   146→   146→      ctx.fillStyle = Math.random() < 0.5 ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.3)';
+   147→   147→      ctx.fillRect(Math.random() * 256, Math.random() * 512, 2, 2);
+   148→   148→    }
+   149→   149→    ctx.strokeStyle = 'rgba(255,46,146,0.22)';
+   150→   150→    ctx.lineWidth = 2;
+   151→   151→    for (let x = 0; x <= 256; x += 64) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 512); ctx.stroke(); }
+   152→   152→    for (let y = 0; y <= 512; y += 64) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(256, y); ctx.stroke(); }
+   153→   153→    ctx.strokeStyle = 'rgba(255,110,199,0.9)';
+   154→   154→    ctx.lineWidth = 5;
+   155→   155→    ctx.beginPath(); ctx.moveTo(5, 0); ctx.lineTo(5, 512); ctx.stroke();
+   156→   156→    ctx.beginPath(); ctx.moveTo(251, 0); ctx.lineTo(251, 512); ctx.stroke();
+   157→   157→    ctx.fillStyle = 'rgba(255,225,53,0.8)';
+   158→   158→    ctx.fillRect(124, 24, 8, 110);
+   159→   159→    ctx.fillRect(124, 276, 8, 110);
+   160→   160→    const tex = new THREE.CanvasTexture(c);
+   161→   161→    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+   162→   162→    tex.colorSpace = THREE.SRGBColorSpace;
+   163→   163→    tex.anisotropy = 4;
+   164→   164→    return tex;
+   165→   165→  }
+   166→   166→
+   167→   167→  _makeGridTexture() {
+   168→   168→    const c = document.createElement('canvas');
+   169→   169→    c.width = c.height = 256;
+   170→   170→    const ctx = c.getContext('2d');
+   171→   171→    ctx.fillStyle = '#100a20';
+   172→   172→    ctx.fillRect(0, 0, 256, 256);
+   173→   173→    ctx.strokeStyle = 'rgba(255,46,146,0.55)';
+   174→   174→    ctx.lineWidth = 2;
+   175→   175→    for (let i = 0; i <= 256; i += 32) {
+   176→   176→      ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 256); ctx.stroke();
+   177→   177→      ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(256, i); ctx.stroke();
+   178→   178→    }
+   179→   179→    const tex = new THREE.CanvasTexture(c);
+   180→   180→    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+   181→   181→    tex.repeat.set(42, 42);
+   182→   182→    tex.colorSpace = THREE.SRGBColorSpace;
+   183→   183→    return tex;
+   184→   184→  }
+   185→   185→
+   186→   186→  _makeStarGeometry() {
+   187→   187→    const shape = new THREE.Shape();
+   188→   188→    const outer = 0.52, inner = 0.22;
+   189→   189→    for (let i = 0; i < 10; i++) {
+   190→   190→      const r = i % 2 === 0 ? outer : inner;
+   191→   191→      const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
+   192→   192→      const x = Math.cos(a) * r, y = Math.sin(a) * r;
+   193→   193→      if (i === 0) shape.moveTo(x, y); else shape.lineTo(x, y);
+   194→   194→    }
+   195→   195→    shape.closePath();
+   196→   196→    const geo = new THREE.ExtrudeGeometry(shape, {
+   197→   197→      depth: 0.2, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.05, bevelSegments: 1,
+   198→   198→    });
+   199→   199→    geo.center();
+   200→   200→    return geo;
+   201→   201→  }
+   202→   202→
+   203→   203→  _buildPalm() {
+   204→   204→    const trunk = new THREE.CylinderGeometry(0.16, 0.3, 5.4, 7);
+   205→   205→    const coco = new THREE.SphereGeometry(0.22, 8, 6);
+   206→   206→    const ring = new THREE.CylinderGeometry(0.33, 0.33, 0.09, 8);
+   207→   207→    const frond = new THREE.PlaneGeometry(3.1, 0.8, 4, 1);
+   208→   208→    // bend the frond into a droopy leaf
+   209→   209→    const fp = frond.attributes.position;
+   210→   210→    for (let i = 0; i < fp.count; i++) {
+   211→   211→      const x = fp.getX(i);
+   212→   212→      fp.setY(i, fp.getY(i) * (1 - Math.pow(Math.abs(x) / 1.55, 2) * 0.55));
+   213→   213→      fp.setZ(i, -Math.pow(Math.abs(x) / 1.55, 2) * 0.9);
+   214→   214→    }
+   215→   215→    frond.computeVertexNormals();
+   216→   216→
+   217→   217→    const silParts = [part(trunk, COL.trunk, [0, 2.7, 0])];
+   218→   218→    const ringParts = [];
+   219→   219→    [[1.2], [2.4], [3.6]].forEach(([h]) => ringParts.push(part(ring, 0, [0, h, 0])));
+   220→   220→    const cocoParts = [
+   221→   221→      part(coco, 0x3a2153, [0.3, 5.25, 0.12]),
+   222→   222→      part(coco, 0x3a2153, [-0.25, 5.3, -0.18]),
+   223→   223→    ];
+   224→   224→    const frondParts = [];
+   225→   225→    for (let i = 0; i < 7; i++) {
+   226→   226→      const a = (i / 7) * Math.PI * 2;
+   227→   227→      const dir = [Math.cos(a) * 1.35, 5.4, Math.sin(a) * 1.35];
+   228→   228→      frondParts.push(part(frond, 0, dir, [0, -a, -0.42], [1, 1, 1]));
+   229→   229→    }
+   230→   230→    this.geoPalmSil = mergeGeometries([...silParts, ...cocoParts], false);
+   231→   231→    this.geoPalmRings = mergeGeometries(ringParts, false);
+   232→   232→    this.geoPalmFronds = mergeGeometries(frondParts, false);
+   233→   233→    this.matPalmSil = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
+   234→   234→    this.matPalmRings = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 1.1 });
+   235→   235→    this.matPalmFronds = new THREE.MeshStandardMaterial({
+   236→   236→      color: 0x0e2b1f, emissive: COL.teal, emissiveIntensity: 0.65, roughness: 0.6, side: THREE.DoubleSide,
+   237→   237→    });
+   238→   238→  }
+   239→   239→
+   240→   240→  _buildMonkey() {
+   241→   241→    const sph = new THREE.SphereGeometry(1, 12, 9);
+   242→   242→    const parts = [
+   243→   243→      part(sph, 0x8b5a2b, [0, 0.6, 0], [0, 0, 0], [0.58, 0.5, 0.52]),      // body
+   244→   244→      part(sph, 0x9c6a35, [0, 1.28, 0], [0, 0, 0], [0.4, 0.38, 0.38]),     // head
+   245→   245→      part(sph, 0x6e4520, [0.34, 1.28, 0.12], [0, 0, 0], [0.15, 0.15, 0.15]), // ear R
+   246→   246→      part(sph, 0x6e4520, [-0.34, 1.28, 0.12], [0, 0, 0], [0.15, 0.15, 0.15]), // ear L
+   247→   247→      part(sph, 0xd9a066, [0, 1.2, 0.3], [0, 0, 0], [0.2, 0.16, 0.12]),    // muzzle
+   248→   248→      part(sph, 0x180d05, [0.12, 1.36, 0.36], [0, 0, 0], [0.05, 0.05, 0.03]), // eye R
+   249→   249→      part(sph, 0x180d05, [-0.12, 1.36, 0.36], [0, 0, 0], [0.05, 0.05, 0.03]), // eye L
+   250→   250→      part(new THREE.CylinderGeometry(0.07, 0.05, 0.7, 6), 0x8b5a2b, [0.4, 0.75, 0.2], [0, 0, -0.7]), // arm R
+   251→   251→      part(new THREE.CylinderGeometry(0.07, 0.05, 0.7, 6), 0x8b5a2b, [-0.4, 0.75, 0.2], [0, 0, 0.7]),  // arm L
+   252→   252→      part(new THREE.CylinderGeometry(0.05, 0.03, 0.9, 6), 0x8b5a2b, [0, 0.55, -0.5], [0.9, 0, 0]),    // tail
+   253→   253→    ];
+   254→   254→    this.geoMonkey = mergeGeometries(parts, false);
+   255→   255→  }
+   256→   256→
+   257→   257→  _buildGorilla() {
+   258→   258→    const sph = new THREE.SphereGeometry(1, 14, 10);
+   259→   259→    const parts = [
+   260→   260→      part(sph, 0x2e2018, [0, 1.05, 0], [0, 0, 0], [1.0, 0.85, 0.8]),      // body
+   261→   261→      part(sph, 0x241811, [0, 2.05, 0.12], [0, 0, 0], [0.52, 0.45, 0.5]),  // head
+   262→   262→      part(new THREE.BoxGeometry(0.75, 0.2, 0.5), 0x241811, [0, 2.32, 0.2], [ -0.2, 0, 0]), // crest
+   263→   263→      part(sph, 0x8a6843, [0, 1.62, 0.55], [0, 0, 0], [0.52, 0.4, 0.3]),   // chest
+   264→   264→      part(new THREE.CylinderGeometry(0.3, 0.3, 0.5, 8), 0x241811, [0.62, 0.3, 0], [0, 0, 0]), // leg R
+   265→   265→      part(new THREE.CylinderGeometry(0.3, 0.3, 0.5, 8), 0x241811, [-0.62, 0.3, 0], [0, 0, 0]), // leg L
+   266→   266→    ];
+   267→   267→    this.geoGorilla = mergeGeometries(parts, false);
+   268→   268→    // arms are separate animated meshes
+   269→   269→    this.geoGorillaArm = new THREE.CapsuleGeometry(0.24, 1.0, 4, 10);
+   270→   270→    this.matGorillaArm = new THREE.MeshStandardMaterial({ color: 0x241811, roughness: 0.85 });
+   271→   271→    this.geoGorillaFist = new THREE.SphereGeometry(0.3, 10, 8);
+   272→   272→  }
+   273→   273→
+   274→   274→  _buildToaster() {
+   275→   275→    const box = new THREE.BoxGeometry(1, 1, 1);
+   276→   276→    const parts = [
+   277→   277→      part(box, 0xc9cdd6, [0, 0.5, 0], [0, 0, 0], [1.35, 0.95, 1.05]),     // chrome body
+   278→   278→      part(box, 0x9fa6b5, [0, 0.06, 0], [0, 0, 0], [1.5, 0.14, 1.2]),      // base
+   279→   279→      part(new THREE.CylinderGeometry(0.07, 0.07, 0.3, 8), 0xd9a066, [0.72, 0.72, 0], [0, 0, 0]), // lever
+   280→   280→      part(new THREE.SphereGeometry(0.09, 8, 6), 0xff2255, [-0.66, 0.86, 0.38], [0, 0, 0]), // knob R
+   281→   281→      part(new THREE.SphereGeometry(0.09, 8, 6), 0xff2255, [-0.66, 0.86, -0.38], [0, 0, 0]), // knob L
+   282→   282→    ];
+   283→   283→    this.geoToaster = mergeGeometries(parts, false);
+   284→   284→    this.matToaster = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.25, metalness: 0.85 });
+   285→   285→    // glowing slots
+   286→   286→    const slot = new THREE.BoxGeometry(0.52, 0.1, 0.78);
+   287→   287→    this.geoSlots = mergeGeometries([part(slot, 0, [0.3, 1.0, 0]), part(slot, 0, [-0.3, 1.0, 0])], false);
+   288→   288→    this.matSlots = new THREE.MeshStandardMaterial({ color: 0xff3300, emissive: 0xff4400, emissiveIntensity: 1.3 });
+   289→   289→    // pop-up toast
+   290→   290→    this.geoToast = new THREE.BoxGeometry(0.46, 0.3, 0.7);
+   291→   291→    this.matToast = new THREE.MeshStandardMaterial({ color: 0xd9a066, roughness: 0.9 });
+   292→   292→  }
+   293→   293→
+   294→   294→  _buildBlender() {
+   295→   295→    // glass jar
+   296→   296→    this.geoBlenderGlass = new THREE.CylinderGeometry(1.85, 1.55, 3.7, 18, 1, true);
+   297→   297→    this.matBlenderGlass = new THREE.MeshStandardMaterial({
+   298→   298→      color: 0xff9de2, transparent: true, opacity: 0.26, roughness: 0.08,
+   299→   299→      metalness: 0.1, side: THREE.DoubleSide, depthWrite: false,
+   300→   300→    });
+   301→   301→    // metal base + lid
+   302→   302→    const base = new THREE.CylinderGeometry(1.95, 2.05, 0.55, 18);
+   303→   303→    const lid = new THREE.CylinderGeometry(1.7, 1.9, 0.35, 18);
+   304→   304→    const cap = new THREE.SphereGeometry(0.35, 10, 8);
+   305→   305→    this.geoBlenderMetal = mergeGeometries([
+   306→   306→      part(base, 0xb9bfd0, [0, 0.28, 0]),
+   307→   307→      part(lid, 0xb9bfd0, [0, 4.05, 0]),
+   308→   308→      part(cap, 0xff2e92, [0, 4.35, 0]),
+   309→   309→    ], false);
+   310→   310→    this.matBlenderMetal = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.3, metalness: 0.85 });
+   311→   311→    // spinning fate blades
+   312→   312→    const fin = new THREE.BoxGeometry(0.16, 1.5, 0.42);
+   313→   313→    this.geoBlades = mergeGeometries([
+   314→   314→      part(fin, 0, [0, 0.95, 0], [0, 0, 0]),
+   315→   315→      part(fin, 0, [0, 0.95, 0], [0, Math.PI / 2, 0]),
+   316→   316→      part(fin, 0, [0, 0.95, 0], [0, Math.PI / 4, 0]),
+   317→   317→      part(fin, 0, [0, 0.95, 0], [0, (Math.PI * 3) / 4, 0]),
+   318→   318→    ], false);
+   319→   319→    this.matBlades = new THREE.MeshStandardMaterial({ color: 0x4a2a6b, emissive: COL.purple, emissiveIntensity: 1.0, metalness: 0.7, roughness: 0.3 });
+   320→   320→    // glowing smoothie vortex inside
+   321→   321→    this.geoSmoothie = new THREE.CylinderGeometry(1.5, 1.25, 2.4, 16);
+   322→   322→    this.matSmoothie = new THREE.MeshStandardMaterial({ color: 0xff2e92, emissive: 0xff2e92, emissiveIntensity: 0.8, transparent: true, opacity: 0.4 });
+   323→   323→  }
+   324→   324→
+   325→   325→  /* ================================================================
+   326→   326→     SKY
+   327→   327→     ================================================================ */
+   328→   328→
+   329→   329→  _buildSky() {
+   330→   330→    // striped synthwave sun
+   331→   331→    const c = document.createElement('canvas');
+   332→   332→    c.width = c.height = 256;
+   333→   333→    const ctx = c.getContext('2d');
+   334→   334→    const grad = ctx.createLinearGradient(0, 0, 0, 256);
+   335→   335→    grad.addColorStop(0, '#ffe95c');
+   336→   336→    grad.addColorStop(0.45, '#ff9d2e');
+   337→   337→    grad.addColorStop(1, '#ff2e92');
+   338→   338→    ctx.fillStyle = grad;
+   339→   339→    ctx.beginPath(); ctx.arc(128, 128, 120, 0, Math.PI * 2); ctx.fill();
+   340→   340→    ctx.globalCompositeOperation = 'destination-out';
+   341→   341→    let y = 128;
+   342→   342→    for (let i = 0; i < 6; i++) {
+   343→   343→      const h = 3 + i * 2.6;
+   344→   344→      ctx.fillRect(0, y, 256, h);
+   345→   345→      y += h + 20 - i * 2;
+   346→   346→    }
+   347→   347→    const sunTex = new THREE.CanvasTexture(c);
+   348→   348→    sunTex.colorSpace = THREE.SRGBColorSpace;
+   349→   349→    this.sun = new THREE.Mesh(
+   350→   350→      new THREE.PlaneGeometry(120, 120),
+   351→   351→      new THREE.MeshBasicMaterial({ map: sunTex, transparent: true, fog: false, depthWrite: false, blending: THREE.AdditiveBlending })
+   352→   352→    );
+   353→   353→    this.sun.renderOrder = -10;
+   354→   354→    this.scene.add(this.sun);
+   355→   355→
+   356→   356→    // starfield
+   357→   357→    const N = 700;
+   358→   358→    const pos = new Float32Array(N * 3);
+   359→   359→    const col = new Float32Array(N * 3);
+   360→   360→    const palette = [new THREE.Color(0xffffff), new THREE.Color(0xffd6f0), new THREE.Color(0xb6fff0), new THREE.Color(0xfff3b0)];
+   361→   361→    for (let i = 0; i < N; i++) {
+   362→   362→      const a = Math.random() * Math.PI * 2;
+   363→   363→      const el = Math.asin(Math.random() * 0.95); // upper hemisphere bias
+   364→   364→      const r = 280 + Math.random() * 50;
+   365→   365→      pos[i * 3] = Math.cos(a) * Math.cos(el) * r;
+   366→   366→      pos[i * 3 + 1] = Math.sin(el) * r * 0.9 + 10;
+   367→   367→      pos[i * 3 + 2] = Math.sin(a) * Math.cos(el) * r;
+   368→   368→      const c2 = palette[(Math.random() * palette.length) | 0];
+   369→   369→      col[i * 3] = c2.r; col[i * 3 + 1] = c2.g; col[i * 3 + 2] = c2.b;
+   370→   370→    }
+   371→   371→    const g = new THREE.BufferGeometry();
+   372→   372→    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+   373→   373→    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+   374→   374→    this.starfield = new THREE.Points(g, new THREE.PointsMaterial({
+   375→   375→      size: 1.8, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.85, fog: false, depthWrite: false,
+   376→   376→    }));
+   377→   377→    this.starfield.renderOrder = -11;
+   378→   378→    this.scene.add(this.starfield);
+   379→   379→  }
+   380→   380→
+   381→   381→  /* ================================================================
+   382→   382→     CHUNK GENERATION
+   383→   383→     ================================================================ */
+   384→   384→
+   385→   385→  reset() {
+   386→   386→    this.chunkIndex = 0;
+   387→   387→    for (let i = 0; i < this.chunks.length; i++) {
+   388→   388→      const chunk = this.chunks[i];
+   389→   389→      chunk.zEnd = START_Z - i * CHUNK_LEN;
+   390→   390→      this._generate(chunk, 0, i);
+   391→   391→    }
+   392→   392→    this.nextZ = START_Z - this.chunks.length * CHUNK_LEN;
+   393→   393→  }
+   394→   394→
+   395→   395→  _recycle(chunk, difficulty) {
+   396→   396→    chunk.zEnd = this.nextZ;
+   397→   397→    this.nextZ -= CHUNK_LEN;
+   398→   398→    this._generate(chunk, difficulty, this.chunkIndex++);
+   399→   399→  }
+   400→   400→
+   401→   401→  _generate(chunk, D, index) {
+   402→   402→    // ---- clear previous content ----
+   403→   403→    for (const b of chunk.allBodies) this.physics.removeBody(b);
+   404→   404→    chunk.allBodies.length = 0;
+   405→   405→    chunk.obstacles.length = 0;
+   406→   406→    chunk.stars.length = 0;
+   407→   407→    chunk.anims.length = 0;
+   408→   408→    for (const d of chunk.disposables) d.dispose();
+   409→   409→    chunk.disposables.length = 0;
+   410→   410→    chunk.group.clear();
+   411→   411→    chunk.gapSpan = null;
+   412→   412→
+   413→   413→    const zEnd = chunk.zEnd;
+   414→   414→    chunk.group.position.z = zEnd; // children use local z in [-CHUNK_LEN, 0]
+   415→   415→
+   416→   416→    const rng = Math.random;
+   417→   417→    const safeRunway = index < 2;
+   418→   418→
+   419→   419→    // ---- void gap layout ----
+   420→   420→    let gapLocal = null;
+   421→   421→    if (!safeRunway && index > 3 && rng() < Math.min(0.07 + D * 0.24, 0.33)) {
+   422→   422→      const gapLen = 7 + D * 5;
+   423→   423→      const gz = -(12 + rng() * (CHUNK_LEN - 26 - gapLen));
+   424→   424→      gapLocal = { near: gz, far: gz - gapLen };
+   425→   425→    }
+   426→   426→
+   427→   427→    // ---- solid road segments ----
+   428→   428→    const segments = [];
+   429→   429→    if (gapLocal) {
+   430→   430→      segments.push({ z0: 0, z1: gapLocal.near });
+   431→   431→      segments.push({ z0: gapLocal.far, z1: -CHUNK_LEN });
+   432→   432→    } else {
+   433→   433→      segments.push({ z0: 0, z1: -CHUNK_LEN });
+   434→   434→    }
+   435→   435→    for (const seg of segments) {
+   436→   436→      if (seg.z0 - seg.z1 < 1) continue; // skip degenerate segments (length is z0 - z1)
+   437→   437→      const len = seg.z0 - seg.z1;
+   438→   438→      const mid = (seg.z0 + seg.z1) / 2;
+   439→   439→      const worldMid = zEnd + mid;
+   440→   440→      // road plane
+   441→   441→      const geo = new THREE.PlaneGeometry(ROAD_W, len);
+   442→   442→      const uv = geo.attributes.uv;
+   443→   443→      for (let i = 0; i < uv.count; i++) uv.setY(i, uv.getY(i) * (len / 10));
+   444→   444→      const road = new THREE.Mesh(geo, this.matRoad);
+   445→   445→      road.rotation.x = -Math.PI / 2;
+   446→   446→      road.position.set(0, 0, mid);
+   447→   447→      road.receiveShadow = true;
+   448→   448→      chunk.group.add(road);
+   449→   449→      chunk.disposables.push(geo);
+   450→   450→      // physics slab (top at y=0)
+   451→   451→      chunk.allBodies.push(this.physics.addStaticBox(
+   452→   452→        { x: ROAD_W / 2, y: 0.5, z: len / 2 }, { x: 0, y: -0.5, z: worldMid }, { kind: 'ground' }
+   453→   453→      ));
+   454→   454→      // neon edge strips
+   455→   455→      for (const sx of [-ROAD_W / 2 + 0.15, ROAD_W / 2 - 0.15]) {
+   456→   456→        const strip = new THREE.Mesh(this.geoEdge, this.matEdge);
+   457→   457→        strip.scale.set(0.3, 0.17, len);
+   458→   458→        strip.position.set(sx, 0.08, mid);
+   459→   459→        chunk.group.add(strip);
+   460→   460→      }
+   461→   461→    }
+   462→   462→
+   463→   463→    // gap warning strips + span bookkeeping
+   464→   464→    if (gapLocal) {
+   465→   465→      for (const gz of [gapLocal.near + 0.4, gapLocal.far - 0.4]) {
+   466→   466→        const w = new THREE.Mesh(this.geoWarn, this.matWarn);
+   467→   467→        w.position.set(0, 0.045, gz);
+   468→   468→        chunk.group.add(w);
+   469→   469→      }
+   470→   470→      chunk.gapSpan = { zNear: zEnd + gapLocal.near, zFar: zEnd + gapLocal.far };
+   471→   471→    }
+   472→   472→
+   473→   473→    if (safeRunway) {
+   474→   474→      this._addScenery(chunk, rng);
+   475→   475→      this._addStarLine(chunk, rng, D, null);
+   476→   476→      return;
+   477→   477→    }
+   478→   478→
+   479→   479→    // ---- slip zones (banana peel traps) ----
+   480→   480→    const slipZones = [];
+   481→   481→    if (rng() < 0.22 + D * 0.16) {
+   482→   482→      const patchZ = -(8 + rng() * (CHUNK_LEN - 18));
+   483→   483→      if (!this._inGap(gapLocal, patchZ, 6)) {
+   484→   484→        const px = (rng() - 0.5) * 6.4;
+   485→   485→        const half = { x: 2.7, y: 0.09, z: 4.2 };
+   486→   486→        const body = this.physics.addStaticBox(half, { x: px, y: 0.1, z: zEnd + patchZ }, {
+   487→   487→          kind: 'slipzone', material: this.physics.groundMaterial, userData: { chunk, id: rng() },
+   488→   488→        });
+   489→   489→        chunk.allBodies.push(body);
+   490→   490→        slipZones.push(patchZ);
+   491→   491→        // scattered peel bits
+   492→   492→        const nPeels = 7 + ((rng() * 3) | 0);
+   493→   493→        for (let i = 0; i < nPeels; i++) {
+   494→   494→          const peel = new THREE.Mesh(this.geoPeel, this.matPeel);
+   495→   495→          peel.position.set(px + (rng() - 0.5) * 4.6, 0.06, patchZ + (rng() - 0.5) * 7);
+   496→   496→          peel.rotation.set(0, rng() * Math.PI * 2, (rng() - 0.5) * 0.25);
+   497→   497→          peel.scale.setScalar(0.8 + rng() * 0.5);
+   498→   498→          chunk.group.add(peel);
+   499→   499→        }
+   500→   500→      }
+   501→   501→    }
+   502→   502→
+   503→   503→    // ---- obstacles ----
+   504→   504→    const count = 2 + Math.round(D * 3) + (D > 0.55 && rng() < 0.35 ? 1 : 0);
+   505→   505→    const placed = [];
+   506→   506→    for (let i = 0; i < count; i++) {
+   507→   507→      let lz = null;
+   508→   508→      for (let attempt = 0; attempt < 26; attempt++) {
+   509→   509→        const z = -(5 + rng() * (CHUNK_LEN - 10));
+   510→   510→        if (this._inGap(gapLocal, z, 7)) continue;
+   511→   511→        if (slipZones.some((s) => Math.abs(s - z) < 6)) continue;
+   512→   512→        if (placed.some((s) => Math.abs(s - z) < 8.5)) continue;
+   513→   513→        lz = z;
+   514→   514→        break;
+   515→   515→      }
+   516→   516→      if (lz === null) continue;
+   517→   517→      placed.push(lz);
+   518→   518→      const type = this._pickObstacleType(D, rng, placed.length === 1);
+   519→   519→      this._addObstacle(chunk, type, lz, rng, D);
+   520→   520→    }
+   521→   521→
+   522→   522→    // ---- potassium star lines ----
+   523→   523→    if (rng() < 0.68) this._addStarLine(chunk, rng, D, gapLocal);
+   524→   524→
+   525→   525→    // ---- scenery ----
+   526→   526→    this._addScenery(chunk, rng);
+   527→   527→  }
+   528→   528→
+   529→   529→  _inGap(gapLocal, z, margin) {
+   530→   530→    return !!gapLocal && z < gapLocal.near + margin && z > gapLocal.far - margin;
+   531→   531→  }
+   532→   532→
+   533→   533→  _pickObstacleType(D, rng, first) {
+   534→   534→    const entries = [
+   535→   535→      ['monkey', 10],
+   536→   536→      ['toaster', D > 0.08 ? 7 : 0],
+   537→   537→      ['blender', D > 0.18 ? 4 + D * 5 : 0],
+   538→   538→      ['gorilla', D > 0.3 && first ? 3.5 : 0],
+   539→   539→    ];
+   540→   540→    let total = 0;
+   541→   541→    for (const [, w] of entries) total += w;
+   542→   542→    let r = rng() * total;
+   543→   543→    for (const [t, w] of entries) { r -= w; if (r <= 0) return t; }
+   544→   544→    return 'monkey';
+   545→   545→  }
+   546→   546→
+   547→   547→  _addObstacle(chunk, type, lz, rng, D) {
+   548→   548→    const zEnd = chunk.zEnd;
+   549→   549→    let mesh, body, damage = 1, knock = 7;
+   550→   550→
+   551→   551→    if (type === 'monkey') {
+   552→   552→      mesh = new THREE.Mesh(this.geoMonkey, this.matFlat);
+   553→   553→      mesh.castShadow = true;
+   554→   554→      const x = (rng() - 0.5) * 8.8;
+   555→   555→      mesh.position.set(x, 0, lz);
+   556→   556→      const phase = rng() * 9;
+   557→   557→      chunk.anims.push((t) => {
+   558→   558→        mesh.position.y = Math.abs(Math.sin(t * 2.2 + phase)) * 0.22;
+   559→   559→        mesh.rotation.z = Math.sin(t * 1.6 + phase) * 0.07;
+   560→   560→      });
+   561→   561→      body = this.physics.addStaticBox({ x: 0.62, y: 0.75, z: 0.6 }, { x, y: 0.75, z: zEnd + lz }, { userData: { type } });
+   562→   562→    } else if (type === 'gorilla') {
+   563→   563→      mesh = new THREE.Group();
+   564→   564→      const g = new THREE.Mesh(this.geoGorilla, this.matFlat);
+   565→   565→      g.castShadow = true;
+   566→   566→      mesh.add(g);
+   567→   567→      const arms = [];
+   568→   568→      for (const sx of [0.95, -0.95]) {
+   569→   569→        const arm = new THREE.Group();
+   570→   570→        const am = new THREE.Mesh(this.geoGorillaArm, this.matGorillaArm);
+   571→   571→        am.position.y = -0.65;
+   572→   572→        am.castShadow = true;
+   573→   573→        const fist = new THREE.Mesh(this.geoGorillaFist, this.matGorillaArm);
+   574→   574→        fist.position.y = -1.35;
+   575→   575→        arm.add(am, fist);
+   576→   576→        arm.position.set(sx, 1.95, 0.15);
+   577→   577→        mesh.add(arm);
+   578→   578→        arms.push(arm);
+   579→   579→      }
+   580→   580→      const x = rng() < 0.5 ? -3.1 : 3.1;
+   581→   581→      mesh.position.set(x, 0, lz);
+   582→   582→      const phase = rng() * 9;
+   583→   583→      chunk.anims.push((t) => {
+   584→   584→        const thump = Math.max(0, Math.sin(t * 0.9 + phase));
+   585→   585→        const swing = Math.sin(t * 3 + phase) * 0.45;
+   586→   586→        arms[0].rotation.x = thump > 0.94 ? -2.4 : swing;
+   587→   587→        arms[1].rotation.x = thump > 0.94 ? -2.4 : -swing;
+   588→   588→        mesh.position.y = Math.abs(Math.sin(t * 2 + phase)) * 0.12;
+   589→   589→      });
+   590→   590→      damage = 2; knock = 11;
+   591→   591→      body = this.physics.addStaticBox({ x: 1.05, y: 1.35, z: 0.85 }, { x, y: 1.35, z: zEnd + lz }, { userData: { type } });
+   592→   592→    } else if (type === 'toaster') {
+   593→   593→      mesh = new THREE.Group();
+   594→   594→      const tm = new THREE.Mesh(this.geoToaster, this.matToaster);
+   595→   595→      tm.castShadow = true;
+   596→   596→      const slots = new THREE.Mesh(this.geoSlots, this.matSlots);
+   597→   597→      slots.position.y = 0.0;
+   598→   598→      const toasts = [];
+   599→   599→      for (const tx of [0.3, -0.3]) {
+   600→   600→        const toast = new THREE.Mesh(this.geoToast, this.matToast);
+   601→   601→        toast.position.set(tx, 0.85, 0);
+   602→   602→        toasts.push(toast);
+   603→   603→        mesh.add(toast);
+   604→   604→      }
+   605→   605→      mesh.add(tm, slots);
+   606→   606→      const x = (rng() - 0.5) * 8.6;
+   607→   607→      mesh.position.set(x, 0, lz);
+   608→   608→      const phase = rng() * 9;
+   609→   609→      chunk.anims.push((t) => {
+   610→   610→        const pop = Math.max(0, Math.sin(t * 1.7 + phase));
+   611→   611→        const h = 0.85 + Math.pow(pop, 3) * 0.75;
+   612→   612→        toasts[0].position.y = h;
+   613→   613→        toasts[1].position.y = 0.85 + Math.pow(Math.max(0, Math.sin(t * 1.7 + phase + 0.7)), 3) * 0.75;
+   614→   614→        slots.material.emissiveIntensity = 1.05 + Math.pow(pop, 4) * 1.6;
+   615→   615→      });
+   616→   616→      body = this.physics.addStaticBox({ x: 0.75, y: 0.55, z: 0.62 }, { x, y: 0.55, z: zEnd + lz }, { userData: { type } });
+   617→   617→    } else {
+   618→   618→      // blender of fate
+   619→   619→      mesh = new THREE.Group();
+   620→   620→      const glass = new THREE.Mesh(this.geoBlenderGlass, this.matBlenderGlass);
+   621→   621→      glass.position.y = 2.35;
+   622→   622→      const metal = new THREE.Mesh(this.geoBlenderMetal, this.matBlenderMetal);
+   623→   623→      metal.castShadow = true;
+   624→   624→      const blades = new THREE.Mesh(this.geoBlades, this.matBlades);
+   625→   625→      blades.position.y = 1.0;
+   626→   626→      const smoothie = new THREE.Mesh(this.geoSmoothie, this.matSmoothie);
+   627→   627→      smoothie.position.y = 1.5;
+   628→   628→      mesh.add(glass, metal, blades, smoothie);
+   629→   629→      const x = (rng() - 0.5) * 4.6;
+   630→   630→      mesh.position.set(x, 0, lz);
+   631→   631→      chunk.anims.push((t, dt) => {
+   632→   632→        blades.rotation.y += 15 * dt;
+   633→   633→        smoothie.rotation.y -= 4 * dt;
+   634→   634→      });
+   635→   635→      knock = 13;
+   636→   636→      body = this.physics.addStaticCylinder(2.0, 4.1, { x, y: 2.05, z: zEnd + lz }, { userData: { type } });
+   637→   637→    }
+   638→   638→
+   639→   639→    chunk.group.add(mesh);
+   640→   640→    body.userData.kind = 'obstacle';
+   641→   641→    body.userData.damage = damage;
+   642→   642→    body.userData.knock = knock;
+   643→   643→    body.userData.mesh = mesh;
+   644→   644→    body.userData.chunk = chunk;
+   645→   645→    body.userData.dead = false;
+   646→   646→    const obstacle = { mesh, body, dead: false };
+   647→   647→    chunk.obstacles.push(obstacle);
+   648→   648→    chunk.allBodies.push(body);
+   649→   649→  }
+   650→   650→
+   651→   651→  _addStarLine(chunk, rng, D, gapLocal) {
+   652→   652→    const n = 6 + ((rng() * 3) | 0);
+   653→   653→    const pattern = rng();
+   654→   654→    const startX = (rng() - 0.5) * 8;
+   655→   655→    const startZ = -(6 + rng() * (CHUNK_LEN - 16));
+   656→   656→    const spacing = 2.3;
+   657→   657→    for (let i = 0; i < n; i++) {
+   658→   658→      let x = startX, y = 1.35, z = startZ - i * spacing;
+   659→   659→      if (pattern < 0.36) {
+   660→   660→        y = 1.35 + Math.sin((i / (n - 1)) * Math.PI) * 2.2; // arc
+   661→   661→        x = startX + Math.sin((i / (n - 1)) * Math.PI) * 1.6;
+   662→   662→      } else if (pattern < 0.62) {
+   663→   663→        x = startX + Math.sin(i * 0.85) * 2.4; // sine weave
+   664→   664→      }
+   665→   665→      // straight lines skip gap sections; arcs are allowed to float over gaps
+   666→   666→      if (pattern >= 0.36 && this._inGap(gapLocal, z, 1)) continue;
+   667→   667→      const mesh = new THREE.Mesh(this.geoStar, this.matStar);
+   668→   668→      const phase = rng() * 9;
+   669→   669→      const baseY = y;
+   670→   670→      mesh.position.set(x, y, z);
+   671→   671→      mesh.rotation.z = rng() * Math.PI;
+   672→   672→      chunk.group.add(mesh);
+   673→   673→      const star = { mesh, wx: x, wy: y, wz: chunk.zEnd + z, baseY, phase, collected: false };
+   674→   674→      chunk.stars.push(star);
+   675→   675→      chunk.anims.push((t, dt) => {
+   676→   676→        if (star.collected) return;
+   677→   677→        mesh.rotation.y += 2.6 * dt;
+   678→   678→        mesh.position.y = star.baseY + Math.sin(t * 2.4 + phase) * 0.26;
+   679→   679→        star.wy = mesh.position.y;
+   680→   680→      });
+   681→   681→    }
+   682→   682→  }
+   683→   683→
+   684→   684→  _addScenery(chunk, rng) {
+   685→   685→    // neon palms
+   686→   686→    const palmsPerSide = 2 + ((rng() * 4) | 0);
+   687→   687→    for (let side = 0; side < 2; side++) {
+   688→   688→      for (let i = 0; i < palmsPerSide; i++) {
+   689→   689→        const sgn = side === 0 ? -1 : 1;
+   690→   690→        const x = sgn * (10.5 + rng() * 13);
+   691→   691→        const z = -(4 + rng() * (CHUNK_LEN - 8));
+   692→   692→        const palm = new THREE.Group();
+   693→   693→        const sil = new THREE.Mesh(this.geoPalmSil, this.matPalmSil);
+   694→   694→        sil.castShadow = true;
+   695→   695→        const rings = new THREE.Mesh(this.geoPalmRings, this.matPalmRings);
+   696→   696→        const fronds = new THREE.Mesh(this.geoPalmFronds, this.matPalmFronds);
+   697→   697→        palm.add(sil, rings, fronds);
+   698→   698→        palm.position.set(x, 0, z);
+   699→   699→        palm.rotation.y = rng() * Math.PI * 2;
+   700→   700→        palm.scale.setScalar(0.8 + rng() * 0.55);
+   701→   701→        chunk.group.add(palm);
+   702→   702→      }
+   703→   703→    }
+   704→   704→    // floating banana moons
+   705→   705→    if (rng() < 0.3 && this.moonTemplate) {
+   706→   706→      const moon = this.moonTemplate.clone(true);
+   707→   707→      moon.traverse((o) => { if (o.isMesh) o.material = this.moonMat; });
+   708→   708→      const sgn = rng() < 0.5 ? -1 : 1;
+   709→   709→      moon.position.set(sgn * (16 + rng() * 26), 17 + rng() * 14, -(10 + rng() * (CHUNK_LEN - 20)));
+   710→   710→      moon.scale.setScalar(5.5 + rng() * 4);
+   711→   711→      moon.rotation.z = (rng() - 0.5) * 1.2;
+   712→   712→      chunk.group.add(moon);
+   713→   713→      const rot = 0.15 + rng() * 0.25;
+   714→   714→      chunk.anims.push((t, dt) => { moon.rotation.y += rot * dt; });
+   715→   715→    }
+   716→   716→    // neon arch
+   717→   717→    if (rng() < 0.24) {
+   718→   718→      const arch = new THREE.Mesh(this.geoArch, rng() < 0.5 ? this.matArchPink : this.matArchTeal);
+   719→   719→      arch.position.set(0, 0, -(8 + rng() * (CHUNK_LEN - 16)));
+   720→   720→      chunk.group.add(arch);
+   721→   721→    }
+   722→   722→  }
+   723→   723→
+   724→   724→  /* ================================================================
+   725→   725→     RUNTIME
+   726→   726→     ================================================================ */
+   727→   727→
+   728→   728→  /** Remove an obstacle (Super Yellow Mode smash). */
+   729→   729→  smashObstacle(body) {
+   730→   730→    if (!body.userData || body.userData.dead) return null;
+   731→   731→    body.userData.dead = true;
+   732→   732→    const mesh = body.userData.mesh;
+   733→   733→    const pos = mesh ? mesh.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3();
+   734→   734→    if (mesh) mesh.visible = false;
+   735→   735→    this.physics.removeBody(body);
+   736→   736→    const ob = (body.userData.chunk && body.userData.chunk.obstacles || []).find((o) => o.body === body);
+   737→   737→    if (ob) ob.dead = true;
+   738→   738→    return pos;
+   739→   739→  }
+   740→   740→
+   741→   741→  /** A z position ahead of fromZ guaranteed to be solid road. */
+   742→   742→  findSafeZ(fromZ) {
+   743→   743→    let z = fromZ - 13;
+   744→   744→    for (let iter = 0; iter < 4; iter++) {
+   745→   745→      for (const chunk of this.chunks) {
+   746→   746→        if (!chunk.gapSpan) continue;
+   747→   747→        const g = chunk.gapSpan;
+   748→   748→        if (z < g.zNear + 5 && z > g.zFar - 5) z = g.zFar - 7;
+   749→   749→      }
+   750→   750→    }
+   751→   751→    return z;
+   752→   752→  }
+   753→   753→
+   754→   754→  /**
+   755→   755→   * @param {number} dt
+   756→   756→   * @param {{playerPos:THREE.Vector3, camera:THREE.Camera, canCollect:boolean,
+   757→   757→   *          superMode:boolean, onStar:Function, difficulty:number, time:number}} ctx
+   758→   758→   */
+   759→   759→  update(dt, ctx) {
+   760→   760→    this.time += dt;
+   761→   761→    const t = ctx.time;
+   762→   762→    const pz = ctx.playerPos.z;
+   763→   763→    const px = ctx.playerPos.x;
+   764→   764→    const py = ctx.playerPos.y;
+   765→   765→
+   766→   766→    // ---- recycle chunks that fell behind ----
+   767→   767→    for (const chunk of this.chunks) {
+   768→   768→      if (chunk.zEnd - CHUNK_LEN > pz + 26) this._recycle(chunk, ctx.difficulty);
+   769→   769→    }
+   770→   770→
+   771→   771→    // ---- animate & collect ----
+   772→   772→    for (const chunk of this.chunks) {
+   773→   773→      for (const anim of chunk.anims) anim(t, dt);
+   774→   774→      if (!ctx.canCollect) continue;
+   775→   775→      for (const star of chunk.stars) {
+   776→   776→        if (star.collected) continue;
+   777→   777→        const dx = star.wx - px, dy = star.wy - py, dz = star.wz - pz;
+   778→   778→        const d2 = dx * dx + dy * dy + dz * dz;
+   779→   779→        if (ctx.superMode && d2 < 90) {
+   780→   780→          const d = Math.sqrt(d2) || 1;
+   781→   781→          const k = Math.min(1, (dt * 20) / d);
+   782→   782→          star.wx += (px - star.wx) * k;
+   783→   783→          star.wy += (py - star.wy) * k;
+   784→   784→          star.wz += (pz - star.wz) * k;
+   785→   785→          star.mesh.position.set(star.wx, star.wy, star.wz - chunk.zEnd);
+   786→   786→          if (d < 2.4) this._collect(star, ctx);
+   787→   787→        } else if (d2 < 2.9) {
+   788→   788→          this._collect(star, ctx);
+   789→   789→        }
+   790→   790→      }
+   791→   791→    }
+   792→   792→
+   793→   793→    // ---- world-fixed grid floor follows the runner ----
+   794→   794→    this.grid.position.z = pz;
+   795→   795→    this.gridTex.offset.y = -pz / 10;
+   796→   796→
+   797→   797→    // ---- sky follows camera ----
+   798→   798→    const cp = ctx.camera.position;
+   799→   799→    this.sun.position.set(cp.x * 0.25, 30 + cp.y * 0.1, cp.z - 300);
+   800→   800→    this.starfield.position.copy(cp);
+   801→   801→  }
+   802→   802→
+   803→   803→  _collect(star, ctx) {
+   804→   804→    star.collected = true;
+   805→   805→    star.mesh.visible = false;
+   806→   806→    if (ctx.onStar) ctx.onStar(star);
+   807→   807→  }
+   808→   808→}
+   809→   809→

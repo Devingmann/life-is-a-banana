@@ -7,10 +7,18 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
  * -----------
  * Procedural chunk manager for the infinite "Highway of Life".
  *  - Recycled 50-unit road chunks with neon edges, void gaps & warning strips
- *  - Obstacles: Monkeys, Gorilla Bosses, Electric Toasters, the Giant Blender
- *    of Fate — all merged single-draw-call meshes with cannon hitboxes
+ *  - Obstacles: Monkeys (some PATROL across the road), Gorilla Bosses,
+ *    Electric Toasters (that LAUNCH hot toast barrages at high difficulty),
+ *    the Giant Blender of Fate and the Great Juicer — spinning neon arms
+ *    you must jump over. All merged single-draw-call meshes + cannon hitboxes
  *  - Potassium stars (distance-collected + magnetized in Super Yellow Mode)
+ *    with arc / sine-weave / zigzag / double-arc patterns
+ *  - RARE golden bananas: +500 jackpot pickups
  *  - Banana-peel slip traps (thin physics triggers → chaotic friction loss)
+ *  - Speed pads: teal chevron strips → ZOOM! speed bursts
+ *  - Zones: every 400 m the palette shifts (neon edges, palm fronds, sun,
+ *    grid, fog) — synced with GameLogic announcements
+ *  - Neon joke billboards ("LA VIE EST UNE BANANE", "OBEY THE MOON"...)
  *  - Cyber-tropical scenery: neon palms, floating banana moons, neon arches,
  *    synthwave grid floor, striped sun, starfield
  */
@@ -25,12 +33,33 @@ const COL = {
   gold: 0xffd24a, purple: 0x9b5de5, trunk: 0x241338, frond: 0x0d6b4f,
 };
 
+/** Zone palettes — index cycles as difficulty climbs. */
+const ZONE_DEFS = [
+  { edge: 0xff2e92, frond: 0x00ffa3, sun: 0xffffff, grid: 0xffe9f6, fog: 0x160a2e },
+  { edge: 0x9b5de5, frond: 0x8f7bff, sun: 0xd9c2ff, grid: 0xe7dcff, fog: 0x1c0b3a },
+  { edge: 0xff6a00, frond: 0xffb347, sun: 0xffd2a8, grid: 0xffe3c2, fog: 0x2a0c12 },
+  { edge: 0x39d0ff, frond: 0x9fe8ff, sun: 0xcdeeff, grid: 0xd9f4ff, fog: 0x0a1428 },
+  { edge: 0xffe135, frond: 0xffe135, sun: 0xfff3b0, grid: 0xfff6c8, fog: 0x241a04 },
+];
+
+const BILLBOARD_MSGS = [
+  'LA VIE EST\nUNE BANANE',
+  'SLIP\nRESPONSABLY',
+  'POTASSIUM\nIS POWER',
+  'OBEY\nTHE MOON',
+  'SPEED LIMIT\nOUI OUI',
+  'SMOOTHIE\n= FATE',
+  'PEEL IT\nTILL YOU\nMAKE IT',
+  'TURBO\nÉTERNEL',
+];
+
 /* ---------- tiny geometry helper: tint + transform + merge ---------- */
 const _m4 = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
 const _e = new THREE.Euler();
 const _v = new THREE.Vector3();
 const _s = new THREE.Vector3();
+const _yAxis = new CANNON.Vec3(0, 1, 0);
 
 function part(geoSrc, hex, pos = [0, 0, 0], rot = [0, 0, 0], scl = [1, 1, 1]) {
   const g = geoSrc.clone();
@@ -52,7 +81,7 @@ export class Environment {
   /**
    * @param {THREE.Scene} scene
    * @param {import('./PhysicsWorld.js').PhysicsWorld} physics
-   * @param {THREE.Group} bananaTemplate from AssetManager (for banana moons)
+   * @param {THREE.Group} bananaTemplate from AssetManager (for banana moons / goldens)
    */
   constructor(scene, physics, bananaTemplate) {
     this.scene = scene;
@@ -62,6 +91,20 @@ export class Environment {
     this.nextZ = START_Z;
     this.time = 0;
 
+    // ---- zone tint state (lerped every frame) ----
+    this.zoneIndex = 0;
+    this.fogColor = new THREE.Color(ZONE_DEFS[0].fog);
+    this._tEdge = new THREE.Color();
+    this._tFrond = new THREE.Color();
+    this._tSun = new THREE.Color();
+    this._tGrid = new THREE.Color();
+    this._tFog = new THREE.Color();
+
+    // ---- toast projectile pool ----
+    this.toasts = [];
+    this.toastPool = [];
+    this._billIdx = 0;
+
     this.group = new THREE.Group();
     scene.add(this.group);
 
@@ -69,10 +112,14 @@ export class Environment {
     this._buildSky();
 
     for (let i = 0; i < CHUNK_COUNT; i++) {
-      const chunk = { group: new THREE.Group(), zEnd: 0, allBodies: [], obstacles: [], stars: [], anims: [], gapSpan: null, disposables: [] };
+      const chunk = {
+        group: new THREE.Group(), zEnd: 0, allBodies: [], obstacles: [], stars: [],
+        goldens: [], anims: [], gapSpan: null, disposables: [],
+      };
       this.group.add(chunk.group);
       this.chunks.push(chunk);
     }
+    this.setZone(0, true);
     this.reset();
   }
 
@@ -100,6 +147,18 @@ export class Environment {
       roughness: 0.3, metalness: 0.7,
     });
 
+    // --- golden banana pickup ---
+    this.matGolden = new THREE.MeshStandardMaterial({
+      color: 0xffd700, emissive: 0xffb700, emissiveIntensity: 1.35,
+      roughness: 0.22, metalness: 0.85,
+    });
+    this.goldenTemplate = bananaTemplate ? bananaTemplate.clone(true) : null;
+    if (this.goldenTemplate) {
+      this.goldenTemplate.traverse((o) => {
+        if (o.isMesh) { o.material = this.matGolden; o.castShadow = false; }
+      });
+    }
+
     // --- neon palm (silhouette + teal fronds + pink rings) ---
     this._buildPalm();
 
@@ -108,10 +167,19 @@ export class Environment {
     this._buildGorilla();
     this._buildToaster();
     this._buildBlender();
+    this._buildJuicer();
 
     // --- slip-zone peel bits ---
     this.geoPeel = new THREE.BoxGeometry(0.55, 0.1, 1.05);
     this.matPeel = new THREE.MeshStandardMaterial({ color: COL.banana, emissive: 0xcaa500, emissiveIntensity: 0.22, roughness: 0.5 });
+
+    // --- speed pad (turbo chevrons) ---
+    this.geoPad = new THREE.PlaneGeometry(2.7, 4.6);
+    this.geoPad.rotateX(-Math.PI / 2);
+    this.matPad = new THREE.MeshBasicMaterial({ map: this._makePadTexture(), transparent: true, opacity: 0.96 });
+
+    // --- billboards ---
+    this._buildBillboards();
 
     // --- banana moons ---
     this.moonMat = new THREE.MeshStandardMaterial({ color: 0xffdf6b, emissive: 0xffca28, emissiveIntensity: 0.8, roughness: 0.5 });
@@ -179,6 +247,30 @@ export class Environment {
     const tex = new THREE.CanvasTexture(c);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.repeat.set(42, 42);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  _makePadTexture() {
+    const c = document.createElement('canvas');
+    c.width = 128; c.height = 256;
+    const ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, 128, 256);
+    // three glowing chevrons pointing forward (canvas "up")
+    for (let i = 0; i < 3; i++) {
+      const y = 210 - i * 68;
+      ctx.strokeStyle = 'rgba(0,255,163,0.95)';
+      ctx.lineWidth = 17;
+      ctx.lineCap = 'round';
+      ctx.shadowColor = 'rgba(0,255,163,0.9)';
+      ctx.shadowBlur = 16;
+      ctx.beginPath();
+      ctx.moveTo(18, y);
+      ctx.lineTo(64, y - 44);
+      ctx.lineTo(110, y);
+      ctx.stroke();
+    }
+    const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     return tex;
   }
@@ -259,7 +351,7 @@ export class Environment {
     const parts = [
       part(sph, 0x2e2018, [0, 1.05, 0], [0, 0, 0], [1.0, 0.85, 0.8]),      // body
       part(sph, 0x241811, [0, 2.05, 0.12], [0, 0, 0], [0.52, 0.45, 0.5]),  // head
-      part(new THREE.BoxGeometry(0.75, 0.2, 0.5), 0x241811, [0, 2.32, 0.2], [ -0.2, 0, 0]), // crest
+      part(new THREE.BoxGeometry(0.75, 0.2, 0.5), 0x241811, [0, 2.32, 0.2], [-0.2, 0, 0]), // crest
       part(sph, 0x8a6843, [0, 1.62, 0.55], [0, 0, 0], [0.52, 0.4, 0.3]),   // chest
       part(new THREE.CylinderGeometry(0.3, 0.3, 0.5, 8), 0x241811, [0.62, 0.3, 0], [0, 0, 0]), // leg R
       part(new THREE.CylinderGeometry(0.3, 0.3, 0.5, 8), 0x241811, [-0.62, 0.3, 0], [0, 0, 0]), // leg L
@@ -289,6 +381,10 @@ export class Environment {
     // pop-up toast
     this.geoToast = new THREE.BoxGeometry(0.46, 0.3, 0.7);
     this.matToast = new THREE.MeshStandardMaterial({ color: 0xd9a066, roughness: 0.9 });
+    // red-hot airborne toast (projectile)
+    this.matHotToast = new THREE.MeshStandardMaterial({
+      color: 0xffb35c, emissive: 0xff5500, emissiveIntensity: 0.95, roughness: 0.7,
+    });
   }
 
   _buildBlender() {
@@ -320,6 +416,71 @@ export class Environment {
     // glowing smoothie vortex inside
     this.geoSmoothie = new THREE.CylinderGeometry(1.5, 1.25, 2.4, 16);
     this.matSmoothie = new THREE.MeshStandardMaterial({ color: 0xff2e92, emissive: 0xff2e92, emissiveIntensity: 0.8, transparent: true, opacity: 0.4 });
+  }
+
+  _buildJuicer() {
+    // THE GREAT JUICER: a pillar with two spinning neon blade arms at
+    // jumpable height — time your jump or get juiced.
+    const hub = new THREE.CylinderGeometry(0.42, 0.55, 2.7, 12);
+    const ring = new THREE.TorusGeometry(0.62, 0.09, 8, 20);
+    const cap = new THREE.SphereGeometry(0.3, 10, 8);
+    this.geoJuicerHub = mergeGeometries([
+      part(hub, 0x2e2050, [0, 1.35, 0]),
+      part(ring, 0, [0, 2.25, 0], [Math.PI / 2, 0, 0]),
+      part(cap, 0xff2255, [0, 2.78, 0]),
+    ], false);
+    this.matJuicerHub = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.35, metalness: 0.65 });
+    // one arm: box extending from center along +X, plus a glowing tip orb
+    const armBox = new THREE.BoxGeometry(3.5, 0.3, 0.3);
+    const tip = new THREE.SphereGeometry(0.24, 10, 8);
+    this.geoJuicerArm = mergeGeometries([
+      part(armBox, 0, [1.85, 0, 0]),
+      part(tip, 0, [3.68, 0, 0]),
+    ], false);
+    this.matJuicerArm = new THREE.MeshStandardMaterial({ color: 0xff2255, emissive: 0xff2255, emissiveIntensity: 1.5, roughness: 0.3, metalness: 0.4 });
+  }
+
+  _buildBillboards() {
+    this.geoBillPole = new THREE.CylinderGeometry(0.09, 0.13, 3.6, 8);
+    this.matBillPole = new THREE.MeshStandardMaterial({ color: 0x1c0f33, roughness: 0.8, metalness: 0.3 });
+    this.geoBillPanel = new THREE.BoxGeometry(4.6, 2.7, 0.14);
+    this.matBillSide = new THREE.MeshStandardMaterial({ color: 0x150b2b, roughness: 0.85 });
+    this.billboardMats = BILLBOARD_MSGS.map((m) => this._makeBillboardMat(m));
+  }
+
+  _makeBillboardMat(text) {
+    const c = document.createElement('canvas');
+    c.width = 512; c.height = 300;
+    const ctx = c.getContext('2d');
+    // background
+    const grad = ctx.createLinearGradient(0, 0, 0, 300);
+    grad.addColorStop(0, '#1a0d33');
+    grad.addColorStop(1, '#0d0722');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 512, 300);
+    // neon double border
+    ctx.strokeStyle = 'rgba(255,46,146,0.95)';
+    ctx.lineWidth = 10;
+    ctx.strokeRect(12, 12, 488, 276);
+    ctx.strokeStyle = 'rgba(0,255,163,0.75)';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(26, 26, 460, 248);
+    // glowing text lines
+    const lines = text.split('\n');
+    const fontSize = lines.length >= 3 ? 62 : (lines.length === 2 ? 80 : 92);
+    ctx.font = `900 ${fontSize}px Orbitron, "Arial Black", monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#FFE135';
+    ctx.shadowColor = 'rgba(255,225,53,0.85)';
+    ctx.shadowBlur = 22;
+    const lh = fontSize * 1.12;
+    const startY = 150 - ((lines.length - 1) * lh) / 2;
+    lines.forEach((line, i) => ctx.fillText(line, 256, startY + i * lh));
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    return new THREE.MeshBasicMaterial({ map: tex });
   }
 
   /* ================================================================
@@ -379,11 +540,47 @@ export class Environment {
   }
 
   /* ================================================================
+     ZONES
+     ================================================================ */
+
+  /** Switch palette targets (called by GameLogic every 400 m). */
+  setZone(i, instant = false) {
+    this.zoneIndex = i % ZONE_DEFS.length;
+    const z = ZONE_DEFS[this.zoneIndex];
+    this._tEdge.setHex(z.edge);
+    this._tFrond.setHex(z.frond);
+    this._tSun.setHex(z.sun);
+    this._tGrid.setHex(z.grid);
+    this._tFog.setHex(z.fog);
+    if (instant) {
+      this.matEdge.color.copy(this._tEdge);
+      this.matEdge.emissive.copy(this._tEdge);
+      this.matPalmFronds.emissive.copy(this._tFrond);
+      this.sun.material.color.copy(this._tSun);
+      this.matGrid.color.copy(this._tGrid);
+      this.fogColor.copy(this._tFog);
+    }
+  }
+
+  _lerpZone(dt) {
+    const k = Math.min(1, dt * 2.2);
+    this.matEdge.color.lerp(this._tEdge, k);
+    this.matEdge.emissive.lerp(this._tEdge, k);
+    this.matPalmFronds.emissive.lerp(this._tFrond, k);
+    this.sun.material.color.lerp(this._tSun, k);
+    this.matGrid.color.lerp(this._tGrid, k);
+    this.fogColor.lerp(this._tFog, k);
+  }
+
+  /* ================================================================
      CHUNK GENERATION
      ================================================================ */
 
   reset() {
     this.chunkIndex = 0;
+    this.setZone(0, true);
+    // clear toast projectiles
+    for (let i = this.toasts.length - 1; i >= 0; i--) this._recycleToast(i);
     for (let i = 0; i < this.chunks.length; i++) {
       const chunk = this.chunks[i];
       chunk.zEnd = START_Z - i * CHUNK_LEN;
@@ -404,6 +601,7 @@ export class Environment {
     chunk.allBodies.length = 0;
     chunk.obstacles.length = 0;
     chunk.stars.length = 0;
+    chunk.goldens.length = 0;
     chunk.anims.length = 0;
     for (const d of chunk.disposables) d.dispose();
     chunk.disposables.length = 0;
@@ -416,24 +614,33 @@ export class Environment {
     const rng = Math.random;
     const safeRunway = index < 2;
 
-    // ---- void gap layout ----
+    // ---- void gap layout (two gaps possible at high difficulty) ----
     let gapLocal = null;
-    if (!safeRunway && index > 3 && rng() < Math.min(0.07 + D * 0.24, 0.33)) {
-      const gapLen = 7 + D * 5;
+    let gapLocal2 = null;
+    if (!safeRunway && index > 3 && rng() < Math.min(0.08 + D * 0.26, 0.38)) {
+      const gapLen = Math.min(12.5, 7 + D * 5.5);
       const gz = -(12 + rng() * (CHUNK_LEN - 26 - gapLen));
       gapLocal = { near: gz, far: gz - gapLen };
+      if (D > 0.55 && rng() < 0.4) {
+        const gz2 = -(Math.max(6, gapLocal.far - 8) - (6 + rng() * 8));
+        if (gz2 - 6 > -CHUNK_LEN) gapLocal2 = { near: gz2, far: Math.max(-CHUNK_LEN + 2, gz2 - gapLen * 0.8) };
+      }
     }
 
     // ---- solid road segments ----
     const segments = [];
-    if (gapLocal) {
+    if (gapLocal2 && gapLocal.far > gapLocal2.near) {
+      segments.push({ z0: 0, z1: gapLocal.near });
+      segments.push({ z0: gapLocal.far, z1: gapLocal2.near });
+      segments.push({ z0: gapLocal2.far, z1: -CHUNK_LEN });
+    } else if (gapLocal) {
       segments.push({ z0: 0, z1: gapLocal.near });
       segments.push({ z0: gapLocal.far, z1: -CHUNK_LEN });
     } else {
       segments.push({ z0: 0, z1: -CHUNK_LEN });
     }
     for (const seg of segments) {
-      if (seg.z0 - seg.z1 < 1) continue; // skip degenerate segments (length is z0 - z1)
+      if (seg.z0 - seg.z1 < 1) continue; // skip degenerate segments
       const len = seg.z0 - seg.z1;
       const mid = (seg.z0 + seg.z1) / 2;
       const worldMid = zEnd + mid;
@@ -478,7 +685,7 @@ export class Environment {
 
     // ---- slip zones (banana peel traps) ----
     const slipZones = [];
-    if (rng() < 0.22 + D * 0.16) {
+    if (rng() < 0.22 + D * 0.18) {
       const patchZ = -(8 + rng() * (CHUNK_LEN - 18));
       if (!this._inGap(gapLocal, patchZ, 6)) {
         const px = (rng() - 0.5) * 6.4;
@@ -500,8 +707,25 @@ export class Environment {
       }
     }
 
-    // ---- obstacles ----
-    const count = 2 + Math.round(D * 3) + (D > 0.55 && rng() < 0.35 ? 1 : 0);
+    // ---- speed pads (turbo chevrons — positive interaction) ----
+    if (D > 0.12 && rng() < 0.5) {
+      const padZ = -(6 + rng() * (CHUNK_LEN - 14));
+      if (!this._inGap(gapLocal, padZ, 5) && !slipZones.some((s) => Math.abs(s - padZ) < 7)) {
+        const padX = (rng() - 0.5) * 7;
+        const pad = new THREE.Mesh(this.geoPad, this.matPad);
+        pad.position.set(padX, 0.05, padZ);
+        chunk.group.add(pad);
+        const body = this.physics.addStaticBox(
+          { x: 1.35, y: 0.05, z: 2.3 }, { x: padX, y: 0.05, z: zEnd + padZ },
+          { kind: 'speedpad', material: this.physics.groundMaterial, userData: { chunk } }
+        );
+        chunk.allBodies.push(body);
+      }
+    }
+
+    // ---- obstacles (denser as difficulty climbs) ----
+    const count = Math.min(6, 2 + Math.round(D * 4.2) + (D > 0.55 && rng() < 0.4 ? 1 : 0));
+    const minSpace = Math.max(6.7, 8.5 - D * 1.8);
     const placed = [];
     for (let i = 0; i < count; i++) {
       let lz = null;
@@ -509,7 +733,7 @@ export class Environment {
         const z = -(5 + rng() * (CHUNK_LEN - 10));
         if (this._inGap(gapLocal, z, 7)) continue;
         if (slipZones.some((s) => Math.abs(s - z) < 6)) continue;
-        if (placed.some((s) => Math.abs(s - z) < 8.5)) continue;
+        if (placed.some((s) => Math.abs(s - z) < minSpace)) continue;
         lz = z;
         break;
       }
@@ -520,7 +744,10 @@ export class Environment {
     }
 
     // ---- potassium star lines ----
-    if (rng() < 0.68) this._addStarLine(chunk, rng, D, gapLocal);
+    if (rng() < 0.75) this._addStarLine(chunk, rng, D, gapLocal);
+
+    // ---- rare golden banana jackpot ----
+    if (rng() < 0.16 + D * 0.08) this._addGolden(chunk, rng, gapLocal);
 
     // ---- scenery ----
     this._addScenery(chunk, rng);
@@ -536,6 +763,7 @@ export class Environment {
       ['toaster', D > 0.08 ? 7 : 0],
       ['blender', D > 0.18 ? 4 + D * 5 : 0],
       ['gorilla', D > 0.3 && first ? 3.5 : 0],
+      ['juicer', D > 0.3 ? 3 + D * 6 : 0],
     ];
     let total = 0;
     for (const [, w] of entries) total += w;
@@ -546,7 +774,7 @@ export class Environment {
 
   _addObstacle(chunk, type, lz, rng, D) {
     const zEnd = chunk.zEnd;
-    let mesh, body, damage = 1, knock = 7;
+    let mesh, body, damage = 1, knock = 7, extraBody = null, nmDist = 2.05;
 
     if (type === 'monkey') {
       mesh = new THREE.Mesh(this.geoMonkey, this.matFlat);
@@ -554,11 +782,28 @@ export class Environment {
       const x = (rng() - 0.5) * 8.8;
       mesh.position.set(x, 0, lz);
       const phase = rng() * 9;
-      chunk.anims.push((t) => {
-        mesh.position.y = Math.abs(Math.sin(t * 2.2 + phase)) * 0.22;
-        mesh.rotation.z = Math.sin(t * 1.6 + phase) * 0.07;
-      });
-      body = this.physics.addStaticBox({ x: 0.62, y: 0.75, z: 0.6 }, { x, y: 0.75, z: zEnd + lz }, { userData: { type } });
+      // PATROL MONKEYS: cross the road at higher difficulty — read the lane!
+      const moving = D > 0.22 && rng() < 0.45;
+      if (moving) {
+        const amp = Math.min(4.2, 2.4 + D * 1.8);
+        const spd = 0.65 + D * 0.7 + rng() * 0.25;
+        const baseX = THREE.MathUtils.clamp(x, -ROAD_HALF * 0.55 + 1, ROAD_HALF * 0.55 - 1) * 0.4;
+        const mphase = rng() * Math.PI * 2;
+        body = this.physics.addStaticBox({ x: 0.62, y: 0.75, z: 0.6 }, { x, y: 0.75, z: zEnd + lz }, { userData: { type, moving: true } });
+        chunk.anims.push((t) => {
+          const mx = baseX + Math.sin(t * spd + mphase) * amp;
+          mesh.position.x = THREE.MathUtils.clamp(mx, -5.2, 5.2);
+          mesh.position.y = Math.abs(Math.sin(t * 2.2 + phase)) * 0.22;
+          mesh.rotation.z = Math.sin(t * 1.6 + phase) * 0.07;
+          body.position.x = mesh.position.x;
+        });
+      } else {
+        chunk.anims.push((t) => {
+          mesh.position.y = Math.abs(Math.sin(t * 2.2 + phase)) * 0.22;
+          mesh.rotation.z = Math.sin(t * 1.6 + phase) * 0.07;
+        });
+        body = this.physics.addStaticBox({ x: 0.62, y: 0.75, z: 0.6 }, { x, y: 0.75, z: zEnd + lz }, { userData: { type } });
+      }
     } else if (type === 'gorilla') {
       mesh = new THREE.Group();
       const g = new THREE.Mesh(this.geoGorilla, this.matFlat);
@@ -587,7 +832,7 @@ export class Environment {
         arms[1].rotation.x = thump > 0.94 ? -2.4 : -swing;
         mesh.position.y = Math.abs(Math.sin(t * 2 + phase)) * 0.12;
       });
-      damage = 2; knock = 11;
+      damage = 2; knock = 11; nmDist = 2.5;
       body = this.physics.addStaticBox({ x: 1.05, y: 1.35, z: 0.85 }, { x, y: 1.35, z: zEnd + lz }, { userData: { type } });
     } else if (type === 'toaster') {
       mesh = new THREE.Group();
@@ -614,6 +859,37 @@ export class Environment {
         slots.material.emissiveIntensity = 1.05 + Math.pow(pop, 4) * 1.6;
       });
       body = this.physics.addStaticBox({ x: 0.75, y: 0.55, z: 0.62 }, { x, y: 0.55, z: zEnd + lz }, { userData: { type } });
+    } else if (type === 'juicer') {
+      // THE GREAT JUICER — spinning neon arms you must JUMP over
+      mesh = new THREE.Group();
+      const hub = new THREE.Mesh(this.geoJuicerHub, this.matJuicerHub);
+      hub.castShadow = true;
+      const armA = new THREE.Mesh(this.geoJuicerArm, this.matJuicerArm);
+      const armB = new THREE.Mesh(this.geoJuicerArm, this.matJuicerArm);
+      armA.position.y = 0.85; armB.position.y = 0.85;
+      mesh.add(hub, armA, armB);
+      const x = (rng() - 0.5) * 3.0;
+      mesh.position.set(x, 0, lz);
+      const spin = 1.0 + D * 0.6 + rng() * 0.35;
+      const phase = rng() * Math.PI * 2;
+      const bodies = [];
+      for (let k = 0; k < 2; k++) {
+        bodies.push(this.physics.addStaticBox({ x: 1.9, y: 0.2, z: 0.2 }, { x, y: 0.85, z: zEnd + lz }, { userData: { type } }));
+      }
+      chunk.anims.push((t, dt) => {
+        const a = phase + t * spin;
+        for (let k = 0; k < 2; k++) {
+          const ang = a + k * Math.PI;
+          const arm = k === 0 ? armA : armB;
+          arm.rotation.y = -ang;
+          const b = bodies[k];
+          b.position.set(x + Math.cos(ang) * 1.95, 0.85, zEnd + lz + Math.sin(ang) * 1.95);
+          b.quaternion.setFromAxisAngle(_yAxis, -ang);
+        }
+      });
+      damage = 1; knock = 9; nmDist = 3.7;
+      body = bodies[0];
+      extraBody = bodies[1];
     } else {
       // blender of fate
       mesh = new THREE.Group();
@@ -632,7 +908,7 @@ export class Environment {
         blades.rotation.y += 15 * dt;
         smoothie.rotation.y -= 4 * dt;
       });
-      knock = 13;
+      knock = 13; nmDist = 2.9;
       body = this.physics.addStaticCylinder(2.0, 4.1, { x, y: 2.05, z: zEnd + lz }, { userData: { type } });
     }
 
@@ -640,12 +916,15 @@ export class Environment {
     body.userData.kind = 'obstacle';
     body.userData.damage = damage;
     body.userData.knock = knock;
+    body.userData.nmDist = nmDist;
     body.userData.mesh = mesh;
     body.userData.chunk = chunk;
     body.userData.dead = false;
-    const obstacle = { mesh, body, dead: false };
+    if (extraBody) extraBody.userData = body.userData; // juicer arm #2 shares fate
+    const obstacle = { mesh, body, dead: false, launchT: 2 + rng() * 3 };
     chunk.obstacles.push(obstacle);
     chunk.allBodies.push(body);
+    if (extraBody) chunk.allBodies.push(extraBody);
   }
 
   _addStarLine(chunk, rng, D, gapLocal) {
@@ -656,14 +935,26 @@ export class Environment {
     const spacing = 2.3;
     for (let i = 0; i < n; i++) {
       let x = startX, y = 1.35, z = startZ - i * spacing;
-      if (pattern < 0.36) {
-        y = 1.35 + Math.sin((i / (n - 1)) * Math.PI) * 2.2; // arc
+      if (pattern < 0.30) {
+        // classic arc (floats over gaps)
+        y = 1.35 + Math.sin((i / (n - 1)) * Math.PI) * 2.2;
         x = startX + Math.sin((i / (n - 1)) * Math.PI) * 1.6;
-      } else if (pattern < 0.62) {
-        x = startX + Math.sin(i * 0.85) * 2.4; // sine weave
+      } else if (pattern < 0.55) {
+        // sine weave
+        x = startX + Math.sin(i * 0.85) * 2.4;
+      } else if (pattern < 0.72) {
+        // tight zigzag (harder, richer)
+        y = 1.35 + Math.sin((i / (n - 1)) * Math.PI) * 1.2;
+        x = startX + ((i % 2 === 0) ? -2.7 : 2.7);
+      } else if (pattern < 0.86) {
+        // double arc over a longer span
+        y = 1.35 + Math.abs(Math.sin((i / (n - 1)) * Math.PI * 2)) * 2.4;
+        x = startX + Math.sin((i / (n - 1)) * Math.PI * 2) * 2.0;
       }
-      // straight lines skip gap sections; arcs are allowed to float over gaps
-      if (pattern >= 0.36 && this._inGap(gapLocal, z, 1)) continue;
+      // ground-hugging patterns (weave / zigzag) skip gap sections;
+      // arcs and double arcs are high enough to float over gaps
+      const floatsOverGap = pattern < 0.30 || (pattern >= 0.72 && pattern < 0.86);
+      if (!floatsOverGap && this._inGap(gapLocal, z, 1)) continue;
       const mesh = new THREE.Mesh(this.geoStar, this.matStar);
       const phase = rng() * 9;
       const baseY = y;
@@ -679,6 +970,47 @@ export class Environment {
         star.wy = mesh.position.y;
       });
     }
+  }
+
+  _addGolden(chunk, rng, gapLocal) {
+    if (!this.goldenTemplate) return;
+    const z = -(8 + rng() * (CHUNK_LEN - 16));
+    if (this._inGap(gapLocal, z, 3)) return;
+    const x = (rng() - 0.5) * 7;
+    const mesh = this.goldenTemplate.clone(true);
+    mesh.scale.setScalar(1.5);
+    const baseY = 1.6;
+    mesh.position.set(x, baseY, z);
+    chunk.group.add(mesh);
+    const phase = rng() * 9;
+    const golden = { mesh, wx: x, wy: baseY, wz: chunk.zEnd + z, baseY, phase, collected: false };
+    chunk.goldens.push(golden);
+    chunk.anims.push((t, dt) => {
+      if (golden.collected) return;
+      mesh.rotation.y += 3.2 * dt;
+      mesh.position.y = golden.baseY + Math.sin(t * 2.0 + phase) * 0.34;
+      golden.wy = mesh.position.y;
+    });
+  }
+
+  _addBillboard(chunk, rng) {
+    const side = rng() < 0.5 ? -1 : 1;
+    const x = side * (9.5 + rng() * 2.5);
+    const z = -(6 + rng() * (CHUNK_LEN - 12));
+    const g = new THREE.Group();
+    const pole = new THREE.Mesh(this.geoBillPole, this.matBillPole);
+    pole.position.y = 1.8;
+    pole.castShadow = true;
+    const panel = new THREE.Mesh(this.geoBillPanel, [
+      this.matBillSide, this.matBillSide, this.matBillSide, this.matBillSide,
+      this.billboardMats[(this._billIdx++) % this.billboardMats.length],
+      this.matBillSide,
+    ]);
+    panel.position.y = 4.4;
+    g.add(pole, panel);
+    g.position.set(x, 0, z);
+    g.rotation.y = side < 0 ? (Math.PI / 2 - 0.42) : (-Math.PI / 2 + 0.42);
+    chunk.group.add(g);
   }
 
   _addScenery(chunk, rng) {
@@ -719,6 +1051,63 @@ export class Environment {
       arch.position.set(0, 0, -(8 + rng() * (CHUNK_LEN - 16)));
       chunk.group.add(arch);
     }
+    // joke billboards
+    if (rng() < 0.5) this._addBillboard(chunk, rng);
+  }
+
+  /* ================================================================
+     TOAST BARRAGE (high difficulty)
+     ================================================================ */
+
+  _launchToast(x, z, targetX, targetZ) {
+    const mesh = this.toastPool.pop() || new THREE.Mesh(this.geoToast, this.matHotToast);
+    mesh.visible = true;
+    const vx = THREE.MathUtils.clamp((targetX - x) * 0.6, -8, 8);
+    const vz = THREE.MathUtils.clamp((targetZ - z) * 0.35, -3, 10);
+    mesh.position.set(x, 1.05, z);
+    this.toasts.push({ mesh, x, y: 1.05, z, vx, vy: 10.5, vz, spin: (Math.random() - 0.5) * 14, life: 2.8 });
+  }
+
+  _recycleToast(i) {
+    const t = this.toasts[i];
+    t.mesh.visible = false;
+    this.toastPool.push(t.mesh);
+    this.toasts.splice(i, 1);
+  }
+
+  _updateToasts(dt, ctx, px, py, pz) {
+    // launch from toasters ahead of the player at high difficulty
+    if (ctx.difficulty > 0.42 && ctx.canCollect) {
+      for (const chunk of this.chunks) {
+        for (const ob of chunk.obstacles) {
+          if (ob.dead || !ob.body.userData || ob.body.userData.type !== 'toaster') continue;
+          ob.launchT -= dt;
+          const wz = ob.mesh.position.z + chunk.group.position.z;
+          const ahead = pz - wz;
+          if (ob.launchT <= 0 && ahead > 6 && ahead < 30 && this.toasts.length < 10) {
+            ob.launchT = 2.6 + Math.random() * 2.2;
+            this._launchToast(ob.mesh.position.x, wz, px, pz);
+          }
+        }
+      }
+    }
+    // integrate + hit test
+    for (let i = this.toasts.length - 1; i >= 0; i--) {
+      const t = this.toasts[i];
+      t.life -= dt;
+      t.vy -= 24 * dt;
+      t.x += t.vx * dt; t.y += t.vy * dt; t.z += t.vz * dt;
+      t.mesh.position.set(t.x, t.y, t.z);
+      t.mesh.rotation.x += t.spin * dt;
+      t.mesh.rotation.z += t.spin * 0.7 * dt;
+      const dx = t.x - px, dy = t.y - py, dz = t.z - pz;
+      if (ctx.canCollect && dx * dx + dy * dy + dz * dz < 2.2) {
+        if (ctx.onToastHit) ctx.onToastHit();
+        this._recycleToast(i);
+        continue;
+      }
+      if (t.life <= 0 || t.y < -0.4) this._recycleToast(i);
+    }
   }
 
   /* ================================================================
@@ -754,7 +1143,8 @@ export class Environment {
   /**
    * @param {number} dt
    * @param {{playerPos:THREE.Vector3, camera:THREE.Camera, canCollect:boolean,
-   *          superMode:boolean, onStar:Function, difficulty:number, time:number}} ctx
+   *          superMode:boolean, onStar:Function, onGolden:Function, onToastHit:Function,
+   *          onNearMiss:Function, nearMissOK:boolean, difficulty:number, time:number}} ctx
    */
   update(dt, ctx) {
     this.time += dt;
@@ -762,6 +1152,9 @@ export class Environment {
     const pz = ctx.playerPos.z;
     const px = ctx.playerPos.x;
     const py = ctx.playerPos.y;
+
+    // ---- zone palette lerp ----
+    this._lerpZone(dt);
 
     // ---- recycle chunks that fell behind ----
     for (const chunk of this.chunks) {
@@ -788,7 +1181,48 @@ export class Environment {
           this._collect(star, ctx);
         }
       }
+      // golden bananas (bigger radius + super magnet)
+      for (const g of chunk.goldens) {
+        if (g.collected) continue;
+        const dx = g.wx - px, dy = g.wy - py, dz = g.wz - pz;
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (ctx.superMode && d2 < 42) {
+          const d = Math.sqrt(d2) || 1;
+          const k = Math.min(1, (dt * 16) / d);
+          g.wx += (px - g.wx) * k;
+          g.wy += (py - g.wy) * k;
+          g.wz += (pz - g.wz) * k;
+          g.mesh.position.set(g.wx, g.wy, g.wz - chunk.zEnd);
+        }
+        if (d2 < 3.4) {
+          g.collected = true;
+          g.mesh.visible = false;
+          if (ctx.onGolden) ctx.onGolden(g);
+        }
+      }
     }
+
+    // ---- near-miss GRAZE detection (score for style) ----
+    if (ctx.nearMissOK && ctx.onNearMiss) {
+      for (const chunk of this.chunks) {
+        for (const ob of chunk.obstacles) {
+          if (ob.dead || ob.nearMissed) continue;
+          const wz = ob.mesh.position.z + chunk.group.position.z;
+          const rel = pz - wz;
+          if (rel > 3.2) { ob.nearMissed = true; continue; } // passed cleanly
+          if (rel > 0 && rel < 2.4) {
+            const dx = Math.abs(px - ob.mesh.position.x);
+            if (dx < (ob.body.userData.nmDist || 2.05)) {
+              ob.nearMissed = true;
+              ctx.onNearMiss(px, py + 0.6, pz);
+            }
+          }
+        }
+      }
+    }
+
+    // ---- toast barrage ----
+    this._updateToasts(dt, ctx, px, py, pz);
 
     // ---- world-fixed grid floor follows the runner ----
     this.grid.position.z = pz;

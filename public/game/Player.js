@@ -5,7 +5,9 @@ import { PhysicsWorld, GROUP_PLAYER } from './PhysicsWorld.js';
 const ROAD_HALF = 5.9;      // playable half-width (neon rails beyond)
 const RADIUS = 0.85;        // physics sphere radius
 const JUMP_VELOCITY = 13.8;
-const LATERAL_SPEED = 11.5;
+const DOUBLE_JUMP_VELOCITY = 10.6; // HELI-PEEL: mid-air spin jump
+const LATERAL_BASE = 11.5;
+const LATERAL_PER_DIFF = 8.0;      // steering authority scales with speed
 const COYOTE_TIME = 0.12;
 const JUMP_BUFFER = 0.14;
 
@@ -14,8 +16,9 @@ const JUMP_BUFFER = 0.14;
  * --------------------------
  * A physics sphere drives the motion; the banana mesh tumbles, banks and
  * squashes on top of it. Handles steering, jumping (coyote time + input
- * buffer), slip chaos, peel-layer shells that tear off on damage, and the
- * golden glow of Super Yellow Mode.
+ * buffer + HELI-PEEL double jump), dive-stomps, slip chaos, peel-layer
+ * shells that tear off on damage, the golden glow of Super Yellow Mode and
+ * an anti-stuck watchdog that guarantees the run NEVER freezes solid.
  */
 export class Player {
   /**
@@ -52,15 +55,10 @@ export class Player {
     this.shellPool = [];
     this.shells = [];
     this.flyingPeels = [];
-    const shellMat = () => new THREE.MeshStandardMaterial({
-      color: 0xffe135, transparent: true, opacity: 0.5,
-      emissive: 0xcaa500, emissiveIntensity: 0.22,
-      roughness: 0.45, depthWrite: false,
-    });
     if (this.bodyMesh) {
       [1.16, 1.11, 1.06].forEach((s, i) => {
         const shell = this.bodyMesh.clone();
-        shell.material = shellMat();
+        shell.material = this._makeShellMaterial();
         shell.scale.multiplyScalar(s);
         shell.castShadow = false;
         shell.userData.shellIndex = i;
@@ -86,6 +84,8 @@ export class Player {
     // ---- input & state ----
     this.input = { left: false, right: false, boost: false, down: false };
     this.jumpBuffered = 0;
+    this.jumpsUsed = 0;       // 0 = grounded, 1 = ground-jump spent, 2 = double spent
+    this.prevCoyote = false;
     this.lastGroundedAt = -999;
     this.prevGrounded = false;
     this.prevVy = 0;
@@ -98,8 +98,19 @@ export class Player {
     this.time = 0;
     this.speed = 0;
     this.wasAirborne = false;
+    this.diving = false;    // tracking dive-stomps
+    this.spinT = 0;         // double-jump flourish timer
+    this.stuckTimer = 0;    // anti-stuck watchdog accumulator
 
     this._tmpV = new THREE.Vector3();
+  }
+
+  _makeShellMaterial() {
+    return new THREE.MeshStandardMaterial({
+      color: 0xffe135, transparent: true, opacity: 0.5,
+      emissive: 0xcaa500, emissiveIntensity: 0.22,
+      roughness: 0.45, depthWrite: false,
+    });
   }
 
   queueJump() { this.jumpBuffered = JUMP_BUFFER; }
@@ -133,8 +144,8 @@ export class Player {
 
   /**
    * @param {number} dt
-   * @param {{targetSpeed:number, slipping:boolean, superMode:boolean, active:boolean,
-   *          onJump:Function, onLand:Function}} ctx
+   * @param {{targetSpeed:number, difficulty:number, slipping:boolean, superMode:boolean, active:boolean,
+   *          onJump:Function, onDoubleJump:Function, onDiveLand:Function, onUnstuck:Function}} ctx
    */
   update(dt, ctx) {
     this.time += dt;
@@ -149,23 +160,47 @@ export class Player {
     // landing event
     if (this.prevGrounded === false && coyote && this.prevVy < -5 && ctx.onLand) ctx.onLand();
     if (onGround && this.wasAirborne && this.prevVy < -5 && ctx.onLand) ctx.onLand();
+
+    // ---------- dive-stomp landing (fast-fall impact) ----------
+    if (onGround && this.diving) {
+      this.diving = false;
+      if (this.prevVy < -14 && ctx.onDiveLand) ctx.onDiveLand();
+    }
+
+    // ---------- jump bookkeeping ----------
+    if (coyote) this.jumpsUsed = 0;
+    else if (this.prevCoyote && this.jumpsUsed === 0) this.jumpsUsed = 1; // walked off a ledge: ground jump is spent
+    this.prevCoyote = coyote;
+
+    // ---------- jump (buffered + coyote) & HELI-PEEL double jump ----------
+    this.jumpBuffered = Math.max(0, this.jumpBuffered - dt);
+    if (this.jumpBuffered > 0) {
+      if (coyote && v.y < 2.5) {
+        v.y = JUMP_VELOCITY;
+        this.jumpBuffered = 0;
+        this.jumpsUsed = 1;
+        this.lastGroundedAt = -999; // consume
+        this.squashVel = 6.5;       // stretch pop
+        if (ctx.onJump) ctx.onJump();
+      } else if (!coyote && this.jumpsUsed < 2 && ctx.active) {
+        // HELI-PEEL: mid-air spin jump — the skill ceiling for gap crossings
+        this.jumpBuffered = 0;
+        this.jumpsUsed = 2;
+        v.y = Math.max(v.y, DOUBLE_JUMP_VELOCITY);
+        this.spinT = 0.55;
+        this.squashVel = 4.5;
+        if (ctx.onDoubleJump) ctx.onDoubleJump();
+      }
+    }
+
     this.prevGrounded = coyote;
     this.wasAirborne = !onGround;
     this.prevVy = v.y;
 
-    // ---------- jump (buffered + coyote) ----------
-    this.jumpBuffered = Math.max(0, this.jumpBuffered - dt);
-    if (this.jumpBuffered > 0 && coyote && v.y < 2.5) {
-      v.y = JUMP_VELOCITY;
-      this.jumpBuffered = 0;
-      this.lastGroundedAt = -999; // consume
-      this.squashVel = 6.5;       // stretch pop
-      if (ctx.onJump) ctx.onJump();
-    }
-
     // ---------- dive / fast-fall (S or ArrowDown while airborne) ----------
     if (ctx.active && this.input.down && !onGround && v.y < 3) {
       v.y = Math.min(v.y, -17); // rocket toward the road
+      this.diving = true;
       if (this.squash > 0.9) this.squashVel = -3.2; // slight tuck
     }
 
@@ -173,7 +208,7 @@ export class Player {
     // When knocked backward (v.z > 0 means flying backwards, forward is -Z)
     // recover with extra authority so a bump never becomes a crawl.
     const stunned = this.time < this.stunUntil;
-    const accel = v.z > 0 ? 11 : (coyote ? 6.5 : 2.4);
+    const accel = v.z > 0 ? 13 : (coyote ? 6.5 : 2.8);
     const desiredZ = ctx.active && !stunned ? -ctx.targetSpeed : 0;
     if (!stunned) v.z += (desiredZ - v.z) * Math.min(1, accel * dt);
     this.speed = Math.abs(v.z);
@@ -181,15 +216,15 @@ export class Player {
     // ---------- lateral steering ----------
     // NOTE: with the chase camera behind the banana looking down -Z, world +X
     // is the RIGHT side of the screen. 'left' must push toward -X (steer -1)
-    // and 'right' toward +X (steer +1) — the original signs were inverted,
-    // which made the banana steer the opposite way from the key pressed.
+    // and 'right' toward +X (steer +1).
     let steer = 0;
     if (ctx.active) {
       if (this.input.left) steer -= 1;
       if (this.input.right) steer += 1;
     }
     const slipping = this.slipUntil > this.time;
-    let targetX = steer * LATERAL_SPEED * (coyote ? 1 : 0.55);
+    const lateral = LATERAL_BASE + LATERAL_PER_DIFF * Math.min(1, ctx.difficulty || 0);
+    let targetX = steer * lateral * (coyote ? 1 : 0.72);
     if (slipping && ctx.active) {
       // chaotic banana-peel drift: wobble + jitter impulses (tuned down —
       // the old value could hurl the banana into the neon rails)
@@ -197,21 +232,48 @@ export class Player {
       targetX += Math.sin(this.time * 11.3) * 7.5;
       v.x += (Math.random() - 0.5) * 22 * dt;
     }
-    if (!stunned) v.x += (targetX - v.x) * Math.min(1, (coyote ? 9 : 3.2) * dt);
+    if (!stunned) v.x += (targetX - v.x) * Math.min(1, (coyote ? 9 : 4.5) * dt);
 
     // ---------- road rails (soft clamp) ----------
     const p = this.body.position;
     if (p.x < -ROAD_HALF) { p.x = -ROAD_HALF; if (v.x < 0) v.x *= -0.35; }
     if (p.x > ROAD_HALF) { p.x = ROAD_HALF; if (v.x > 0) v.x *= -0.35; }
 
+    // ---------- ANTI-STUCK WATCHDOG ----------
+    // If the banana is wedged against an obstacle face / gap lip and its
+    // velocity collapses, phase it forward past the blocker after ~0.85s.
+    // This is the hard guarantee that a run can NEVER freeze solid.
+    if (ctx.active && this.time > 1.0) {
+      if (this.speed < 3.4 && Math.abs(v.x) < 4.5 && v.y < 2) {
+        this.stuckTimer += dt;
+      } else {
+        this.stuckTimer = Math.max(0, this.stuckTimer - dt * 2);
+      }
+      if (this.stuckTimer > 0.85) {
+        this.stuckTimer = 0;
+        p.z -= 3.4; // slip THROUGH the cosmos, past whatever blocked us
+        v.set(0, 5.5, -Math.max(9, ctx.targetSpeed * 0.55));
+        this.setInvuln(1.1);
+        this.squashVel = 5;
+        this.spinT = 0.4;
+        if (ctx.onUnstuck) ctx.onUnstuck();
+      }
+    }
+
     // ---------- sync visuals ----------
     this.root.position.set(p.x, p.y, p.z);
 
-    // tumble (rolling + airborne somersault)
+    // tumble (rolling + airborne somersault + heli-peel flourish)
     const tumbleRate = this.speed / (RADIUS + 0.12) * (coyote ? 1 : 1.55);
     this.tumbleGroup.rotation.x += tumbleRate * dt;
-    if (slipping) this.tumbleGroup.rotation.y += 6.2 * dt;
-    else this.tumbleGroup.rotation.y *= 1 - Math.min(1, dt * 4);
+    if (this.spinT > 0) {
+      this.spinT -= dt;
+      this.tumbleGroup.rotation.y += 24 * dt;
+    } else if (slipping) {
+      this.tumbleGroup.rotation.y += 6.2 * dt;
+    } else {
+      this.tumbleGroup.rotation.y *= 1 - Math.min(1, dt * 4);
+    }
 
     // banking + yaw
     const lean = -steer * 0.38;
@@ -275,6 +337,7 @@ export class Player {
     this.body.velocity.set(0, 0, 0);
     this.body.angularVelocity.set(0, 0, 0);
     this.stunUntil = 0;
+    this.stuckTimer = 0;
   }
 
   /** Full reset (new run). */
@@ -282,10 +345,14 @@ export class Player {
     this.respawn(0, 1.6, 0);
     this.input.left = this.input.right = this.input.boost = this.input.down = false;
     this.jumpBuffered = 0;
+    this.jumpsUsed = 0;
+    this.prevCoyote = false;
     this.lastGroundedAt = -999;
     this.invulnUntil = 0;
     this.slipUntil = 0;
     this.superT = 0;
+    this.diving = false;
+    this.spinT = 0;
     this.tumbleGroup.rotation.set(0, 0, 0);
     this.bankGroup.rotation.set(0, 0, 0);
     this.root.rotation.set(0, 0, 0);
@@ -296,14 +363,9 @@ export class Player {
     for (const s of this.shells) this.modelGroup.remove(s);
     this.shells.length = 0;
     if (this.bodyMesh) {
-      const scales = [1.16, 1.11, 1.06];
-      this.shellPool.forEach(() => {}); // pool kept for future reuse
-      scales.forEach((s, i) => {
+      [1.16, 1.11, 1.06].forEach((s, i) => {
         const shell = this.bodyMesh.clone();
-        shell.material = new THREE.MeshStandardMaterial({
-          color: 0xffe135, transparent: true, opacity: 0.5,
-          emissive: 0xcaa500, emissiveIntensity: 0.22, roughness: 0.45, depthWrite: false,
-        });
+        shell.material = this._makeShellMaterial();
         shell.scale.multiplyScalar(s);
         shell.castShadow = false;
         shell.userData.shellIndex = i;

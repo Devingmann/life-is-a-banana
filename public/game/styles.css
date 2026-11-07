@@ -45,6 +45,19 @@ html, body {
   background: repeating-linear-gradient(0deg, #000 0px, #000 1px, transparent 1px, transparent 3px);
 }
 
+/* ---------- full-screen juice flashes (damage / zone change) ---------- */
+#flash-overlay { position: fixed; inset: 0; z-index: 35; pointer-events: none; opacity: 0; }
+#flash-overlay.red { animation: flash-red 0.55s ease-out; }
+#flash-overlay.zone { animation: flash-zone 0.8s ease-out; }
+@keyframes flash-red {
+  0% { opacity: 0.55; background: radial-gradient(ellipse at center, rgba(255,46,146,0.12) 30%, rgba(255,46,146,0.5) 100%); }
+  100% { opacity: 0; }
+}
+@keyframes flash-zone {
+  0% { opacity: 0.42; background: linear-gradient(180deg, rgba(0,255,163,0.28), rgba(255,225,53,0.1) 55%, transparent); }
+  100% { opacity: 0; }
+}
+
 /* ---------- glassmorphism base ---------- */
 .glass {
   background: var(--purple-panel);
@@ -117,6 +130,11 @@ kbd {
   border-bottom-width: 3px; border-radius: 6px; padding: 5px 7px; min-width: 26px; display: inline-block;
 }
 .control-desc { text-align: right; letter-spacing: 0.5px; }
+.control-tip {
+  margin-top: 6px; padding: 9px 12px; border-radius: 10px;
+  background: rgba(0, 255, 163, 0.07); border: 1px solid rgba(0, 255, 163, 0.22);
+  font-size: 10.5px; line-height: 1.6; color: rgba(182, 255, 240, 0.85); letter-spacing: 0.4px;
+}
 
 /* ---------- buttons ---------- */
 .btn {
@@ -150,6 +168,31 @@ kbd {
 .go-stat { display: flex; flex-direction: column; gap: 3px; }
 .go-label { font-family: var(--font-arcade); font-size: 9px; color: rgba(244,237,255,0.55); letter-spacing: 1px; }
 .go-value { font-size: 26px; font-weight: 900; color: var(--banana); text-shadow: 0 0 16px rgba(255,225,53,0.4); font-variant-numeric: tabular-nums; }
+.go-value.small { font-size: 19px; color: #fff; text-shadow: 0 0 10px rgba(255,255,255,0.25); }
+
+/* ---------- arcade RANK badge ---------- */
+.go-rank {
+  font-family: var(--font-arcade); font-size: 30px; line-height: 1;
+  margin-top: 2px; animation: rank-pop 0.6s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+}
+@keyframes rank-pop {
+  0% { transform: scale(2.6) rotate(-14deg); opacity: 0; filter: blur(6px); }
+  60% { transform: scale(0.92) rotate(2deg); opacity: 1; filter: blur(0); }
+  100% { transform: scale(1) rotate(0); }
+}
+.rank-d { color: rgba(244,237,255,0.45); text-shadow: none; }
+.rank-c { color: var(--teal); text-shadow: 0 0 14px rgba(0,255,163,0.55); }
+.rank-b { color: #39d0ff; text-shadow: 0 0 14px rgba(57,208,255,0.6); }
+.rank-a { color: var(--magenta); text-shadow: 0 0 16px rgba(255,46,146,0.7); }
+.rank-s { color: var(--banana); text-shadow: 0 0 18px rgba(255,225,53,0.85); animation: rank-pop 0.6s cubic-bezier(0.2,1.6,0.4,1) both, best-blink 1.2s steps(2) infinite 0.7s; }
+.rank-splus {
+  background: linear-gradient(90deg, #FF2E92, #FFE135, #00FFA3, #FF2E92);
+  background-size: 300% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 0 18px rgba(255,225,53,0.9));
+  animation: rank-pop 0.6s cubic-bezier(0.2,1.6,0.4,1) both, rank-splus-flow 2.2s linear infinite 0.7s;
+}
+@keyframes rank-splus-flow { 0% { background-position: 0% 0; } 100% { background-position: 300% 0; } }
 .newbest { font-family: var(--font-arcade); font-size: 12px; color: var(--teal); animation: best-blink 0.7s steps(2) infinite; letter-spacing: 1px; }
 @keyframes best-blink { 50% { opacity: 0.25; } }
 
@@ -171,6 +214,16 @@ kbd {
 .hud-label { font-family: var(--font-arcade); font-size: 8px; letter-spacing: 1px; color: rgba(244, 237, 255, 0.6); margin-bottom: 5px; }
 .hud-big { font-size: 27px; font-weight: 900; color: #fff; text-shadow: 0 0 9px rgba(255, 46, 146, 0.4); font-variant-numeric: tabular-nums; line-height: 1.05; }
 .hud-small { font-size: 11px; color: var(--teal); font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+/* ---------- zone badge ---------- */
+.hud-zone {
+  font-family: var(--font-arcade); font-size: 8px; letter-spacing: 1.5px;
+  color: var(--gold); margin-top: 5px;
+  text-shadow: 0 0 10px rgba(255,194,77,0.7);
+  animation: zone-pulse 2.4s ease-in-out infinite;
+  white-space: nowrap;
+}
+@keyframes zone-pulse { 0%, 100% { opacity: 0.72; } 50% { opacity: 1; } }
 
 .peel-icons { display: flex; gap: 6px; }
 .peel-icon { width: 26px; height: 26px; filter: drop-shadow(0 0 6px rgba(255, 225, 53, 0.55)); transition: all 0.3s ease; }

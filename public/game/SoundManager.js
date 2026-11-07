@@ -362,4 +362,118 @@ export class SoundManager {
     o.connect(g).connect(this.sfxGain);
     o.start(t); o.stop(t + 0.08);
   }
+
+  /* ================= v2 COSMIC+ SFX ================= */
+
+  /** HELI-PEEL double jump: quick two-tone flutter. */
+  sfxDoubleJump() {
+    if (!this._sfxReady()) return;
+    const t = this.ctx.currentTime;
+    [0, 0.07].forEach((dt, i) => {
+      const o = this._osc('sine', 480 + i * 180, t + dt);
+      o.frequency.exponentialRampToValueAtTime(900 + i * 260, t + dt + 0.12);
+      const g = this._env(t + dt, 0.003, 0.13, 0.15);
+      o.connect(g).connect(this.sfxGain);
+      o.start(t + dt); o.stop(t + dt + 0.18);
+    });
+  }
+
+  /** Near-miss graze: airy whoosh. */
+  sfxNearMiss() {
+    if (!this._sfxReady()) return;
+    const t = this.ctx.currentTime;
+    const n = this._noise(t, 0.3);
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'bandpass'; f.Q.value = 1.4;
+    f.frequency.setValueAtTime(2600, t);
+    f.frequency.exponentialRampToValueAtTime(500, t + 0.26);
+    const g = this._env(t, 0.008, 0.26, 0.22);
+    n.connect(f).connect(g).connect(this.sfxGain);
+  }
+
+  /** Zone transition jingle: three rising teal notes. */
+  sfxZone() {
+    if (!this._sfxReady()) return;
+    const t = this.ctx.currentTime;
+    [76, 80, 83].forEach((note, i) => {
+      const tt = t + i * 0.09;
+      const o = this._osc('triangle', midi(note), tt);
+      const g = this._env(tt, 0.005, 0.3, 0.16);
+      o.connect(g).connect(this.sfxGain);
+      o.start(tt); o.stop(tt + 0.34);
+    });
+  }
+
+  /** Golden banana jackpot fanfare. */
+  sfxGolden() {
+    if (!this._sfxReady()) return;
+    const t = this.ctx.currentTime;
+    [69, 73, 76, 81, 88].forEach((note, i) => {
+      const tt = t + i * 0.06;
+      const o = this._osc('square', midi(note), tt);
+      const g = this._env(tt, 0.004, 0.24, 0.12);
+      o.connect(g).connect(this.sfxGain);
+      o.start(tt); o.stop(tt + 0.28);
+    });
+    const n = this._noise(t + 0.1, 0.5);
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'highpass'; f.frequency.setValueAtTime(3000, t + 0.1);
+    f.frequency.exponentialRampToValueAtTime(9000, t + 0.55);
+    const g = this._env(t + 0.1, 0.04, 0.5, 0.1);
+    n.connect(f).connect(g).connect(this.sfxGain);
+  }
+
+  /** Speed pad: electric zap. */
+  sfxSpeedPad() {
+    if (!this._sfxReady()) return;
+    const t = this.ctx.currentTime;
+    const o = this._osc('square', 180, t);
+    o.frequency.exponentialRampToValueAtTime(940, t + 0.16);
+    const g = this._env(t, 0.004, 0.16, 0.2);
+    o.connect(g).connect(this.sfxGain);
+    o.start(t); o.stop(t + 0.2);
+  }
+
+  /** Hot toast projectile hit: comedic bonk + crunch. */
+  sfxToastHit() {
+    if (!this._sfxReady()) return;
+    const t = this.ctx.currentTime;
+    const o = this._osc('triangle', 330, t);
+    o.frequency.exponentialRampToValueAtTime(85, t + 0.16);
+    const g = this._env(t, 0.002, 0.16, 0.3);
+    o.connect(g).connect(this.sfxGain);
+    o.start(t); o.stop(t + 0.2);
+    const n = this._noise(t, 0.12);
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'lowpass'; f.frequency.value = 900;
+    const g2 = this._env(t, 0.002, 0.1, 0.22);
+    n.connect(f).connect(g2).connect(this.sfxGain);
+  }
+
+  /** Anti-stuck cosmic phase: riser warp. */
+  sfxUnstuck() {
+    if (!this._sfxReady()) return;
+    const t = this.ctx.currentTime;
+    const o = this._osc('sine', 140, t);
+    o.frequency.exponentialRampToValueAtTime(680, t + 0.3);
+    const g = this._env(t, 0.02, 0.3, 0.26);
+    o.connect(g).connect(this.sfxGain);
+    o.start(t); o.stop(t + 0.36);
+  }
+
+  /** Dive-stomp landing: low thump. */
+  sfxDiveLand() {
+    if (!this._sfxReady()) return;
+    const t = this.ctx.currentTime;
+    const o = this._osc('sine', 130, t);
+    o.frequency.exponentialRampToValueAtTime(42, t + 0.18);
+    const g = this._env(t, 0.002, 0.2, 0.5);
+    o.connect(g).connect(this.sfxGain);
+    o.start(t); o.stop(t + 0.24);
+    const n = this._noise(t, 0.1);
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'lowpass'; f.frequency.value = 500;
+    const g2 = this._env(t, 0.001, 0.09, 0.24);
+    n.connect(f).connect(g2).connect(this.sfxGain);
+  }
 }

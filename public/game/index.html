@@ -27,6 +27,7 @@
   <!-- Cosmetic overlays -->
   <div id="vignette" aria-hidden="true"></div>
   <div id="scanlines" aria-hidden="true"></div>
+  <div id="flash-overlay" aria-hidden="true"></div>
 
   <!-- Loading screen -->
   <div id="loading-screen" role="status" aria-label="Loading game assets">
@@ -53,9 +54,11 @@
       <div class="controls-grid">
         <div class="control-row"><span class="key-group"><kbd>ZQSD</kbd><kbd>WASD</kbd><kbd>&#8592;&#8594;</kbd></span><span class="control-desc">Steer the banana (AZERTY, QWERTY &amp; arrows)</span></div>
         <div class="control-row"><span class="key-group"><kbd>ESPACE</kbd><kbd>&#8593;</kbd></span><span class="control-desc">Jump the voids</span></div>
-        <div class="control-row"><span class="key-group"><kbd>&#8595;</kbd><kbd>S</kbd></span><span class="control-desc">Dive to land fast</span></div>
+        <div class="control-row"><span class="key-group"><kbd>ESPACE &#215;2</kbd></span><span class="control-desc">Heli-Peel double jump</span></div>
+        <div class="control-row"><span class="key-group"><kbd>&#8595;</kbd><kbd>S</kbd></span><span class="control-desc">Dive-stomp (speed pop!)</span></div>
         <div class="control-row"><span class="key-group"><kbd>SHIFT</kbd></span><span class="control-desc">Banana Split Turbo</span></div>
         <div class="control-row"><span class="key-group"><kbd>P</kbd></span><span class="control-desc">Pause&nbsp;&middot;&nbsp;<kbd>M</kbd> mute</span></div>
+        <div class="control-tip">Graze obstacles for FRÔLÉ bonuses &middot; teal chevrons = ZOOM &middot; golden bananas = jackpot</div>
       </div>
       <button id="btn-start" class="btn btn-start">START SLIPPING</button>
       <div class="credits">
@@ -75,6 +78,10 @@
         <div class="go-stat"><span class="go-label">DISTANCE</span><span id="go-dist" class="go-value">0 m</span></div>
         <div class="go-stat"><span class="go-label">POTASSIUM</span><span id="go-stars" class="go-value">0</span></div>
         <div class="go-stat"><span class="go-label">BEST</span><span id="go-best" class="go-value">0</span></div>
+        <div class="go-stat"><span class="go-label">TOP SPEED</span><span id="go-topspeed" class="go-value small">0 km/h</span></div>
+        <div class="go-stat"><span class="go-label">NEAR MISSES</span><span id="go-nearmiss" class="go-value small">0</span></div>
+        <div class="go-stat"><span class="go-label">SMASHED</span><span id="go-smashed" class="go-value small">0</span></div>
+        <div class="go-stat"><span class="go-label">RANK</span><span id="go-rank" class="go-rank rank-d">D</span></div>
       </div>
       <div id="go-newbest" class="newbest hidden">NEW COSMIC RECORD!</div>
       <button id="btn-restart" class="btn btn-start">RE-PEEL &amp; RETRY</button>
@@ -108,6 +115,7 @@
         <div class="hud-label">SCORE</div>
         <div id="hud-score" class="hud-big">0</div>
         <div id="hud-dist" class="hud-small">0 m</div>
+        <div id="hud-zone" class="hud-zone hidden">JUNGLE NÉON</div>
       </div>
       <div class="hud-panel glass hud-right">
         <div class="meter-row">

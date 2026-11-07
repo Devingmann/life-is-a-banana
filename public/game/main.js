@@ -32,7 +32,9 @@ class Game {
     this.shakeAmp = 0;
     this.rgbPulse = 0;
     this.envTime = 0;
-    this.fov = 70;
+    this.fov = 72;
+    this.camRoll = 0;
+    this.bloomPulse = 0;
     this._lastT = performance.now();
     this._quality = 2;      // adaptive quality steps (2 = full)
     this._fpsAcc = 0;
@@ -326,6 +328,13 @@ class Game {
         this.slowScale = ev.scale;
         this.slowTimer = ev.dur;
         this.timeScale = ev.scale;
+      } else if (ev.type === 'redflash') {
+        const f = document.getElementById('flash-overlay');
+        if (f) { f.classList.remove('red'); void f.offsetWidth; f.classList.add('red'); }
+      } else if (ev.type === 'zoneflash') {
+        this.bloomPulse = 0.7;
+        const f = document.getElementById('flash-overlay');
+        if (f) { f.classList.remove('zone'); void f.offsetWidth; f.classList.add('zone'); }
       }
     }
     this.logic.events.length = 0;
@@ -348,6 +357,7 @@ class Game {
 
       const pctx = {
         targetSpeed: state === State.PLAYING ? this.logic.targetSpeed : 0,
+        difficulty: this.logic.difficulty,
         slipping: this.logic.slipping,
         superMode: this.logic.superActive,
         active: state === State.PLAYING,
@@ -355,6 +365,26 @@ class Game {
           this.sound.sfxJump();
           this.particles.spawn(this.player.position.x, this.player.position.y - 0.7, this.player.position.z, {
             count: 8, speed: 2.5, size: 9, life: 0.45, gravity: 1, upBias: 0.5, colors: [0xd8c9ff, 0xffffff],
+          });
+        },
+        onDoubleJump: () => {
+          this.sound.sfxDoubleJump();
+          this.particles.spawn(this.player.position.x, this.player.position.y - 0.55, this.player.position.z, {
+            count: 16, speed: 5.5, size: 10, life: 0.42, gravity: -1, upBias: 0.4,
+            colors: [0xd8c9ff, 0x00ffa3, 0xffffff],
+          });
+        },
+        onDiveLand: () => {
+          this.sound.sfxDiveLand();
+          this.particles.shockwave(this.player.position.x, 0.12, this.player.position.z);
+          this.shakeAmp = Math.min(1.5, this.shakeAmp + 0.35);
+          this.logic.diveBoost();
+        },
+        onUnstuck: () => {
+          this.sound.sfxUnstuck();
+          this.particles.spawn(this.player.position.x, this.player.position.y, this.player.position.z, {
+            count: 22, speed: 8, size: 13, life: 0.55, gravity: 2, upBias: 0.7,
+            colors: [0x9b5de5, 0xd8c9ff, 0xff6ec7],
           });
         },
         onLand: () => {
@@ -372,9 +402,22 @@ class Game {
         canCollect: state === State.PLAYING,
         superMode: this.logic.superActive,
         onStar: (star) => this.logic.onStar(star),
+        onGolden: (g) => this.logic.onGolden(g),
+        onToastHit: () => this.logic.onToastHit(),
+        onNearMiss: (x, y, z) => {
+          this.logic.onNearMiss();
+          this.particles.nearMissStreak(x, y, z);
+        },
+        nearMissOK: state === State.PLAYING && !this.logic.superActive,
         difficulty: this.logic.difficulty,
         time: this.envTime,
       });
+
+      // ---- zone fog tint (seamless horizon) ----
+      if (this.environment.fogColor) {
+        this.scene.fog.color.lerp(this.environment.fogColor, Math.min(1, rawDt * 1.8));
+        this.scene.background.copy(this.scene.fog.color);
+      }
 
       this.logic.update(dt);
 
@@ -388,7 +431,7 @@ class Game {
     this.particles.update(dt, {
       playerZ: this.player.position.z,
       speed: this.player.speed,
-      boostFactor: Math.min(1, this.logic.boostFactor + (this.logic.superActive ? 1 : 0)),
+      boostFactor: Math.min(1, this.logic.boostFactor + (this.logic.superActive ? 1 : 0) + (this.logic.padActive ? 0.55 : 0)),
     });
 
     this._updateCamera(rawDt);
@@ -448,6 +491,12 @@ class Game {
     this._lookAt.lerp(target, 1 - Math.exp(-7 * dt));
     this.camera.lookAt(this._lookAt);
 
+    // ---- cinematic roll on steering (pro chase-cam feel) ----
+    const steerInput = (this.player.input.left ? 1 : 0) - (this.player.input.right ? 1 : 0);
+    const rollTarget = state === State.PLAYING ? steerInput * 0.05 : 0;
+    this.camRoll += (rollTarget - this.camRoll) * Math.min(1, dt * 6);
+    this.camera.rotateZ(this.camRoll);
+
     // shake
     if (this.shakeAmp > 0.002) {
       this.camera.position.x += (Math.random() - 0.5) * this.shakeAmp * 0.5;
@@ -458,15 +507,21 @@ class Game {
   }
 
   _updateEffects(dt) {
-    // FOV kick during boost / super
-    const fovTarget = 70 + this.logic.boostFactor * 13 + this.player.superT * 4;
+    // FOV kick during boost / super / speed pads — widens with raw speed too
+    const pad = this.logic.padActive ? 1 : 0;
+    const fovTarget = 72
+      + Math.max(0, this.player.speed - 24) * 0.14
+      + this.logic.boostFactor * 12
+      + this.player.superT * 4
+      + pad * 5;
     this.fov += (fovTarget - this.fov) * Math.min(1, dt * 5);
     if (Math.abs(this.camera.fov - this.fov) > 0.02) {
       this.camera.fov = this.fov;
       this.camera.updateProjectionMatrix();
     }
     // bloom breathing (kept subtle: super mode should pop, not blind)
-    const bloomTarget = 0.45 + this.logic.boostFactor * 0.18 + this.player.superT * 0.5;
+    this.bloomPulse = Math.max(0, this.bloomPulse - dt * 1.4);
+    const bloomTarget = 0.45 + this.logic.boostFactor * 0.18 + this.player.superT * 0.5 + this.bloomPulse;
     this.bloom.strength += (bloomTarget - this.bloom.strength) * Math.min(1, dt * 4);
     // chromatic aberration
     this.rgbPulse = Math.max(0, this.rgbPulse - dt * 0.006);

@@ -38,6 +38,9 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
+        // Extensions inject attributes (bis_*, __processed_*) into <body>
+        // pre-hydration — suppress the resulting cosmetic warning.
+        suppressHydrationWarning
       >
         {children}
         <Toaster />

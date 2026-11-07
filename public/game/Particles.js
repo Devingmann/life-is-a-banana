@@ -184,6 +184,48 @@ export class Particles {
     });
   }
 
+  /* ================= v2 COSMIC+ bursts ================= */
+
+  /** Near-miss graze: fast white streaks whipping past the camera. */
+  nearMissStreak(x, y, z) {
+    this.spawn(x, y, z, {
+      count: 12, spread: 0.8, dir: { x: 0, y: 0, z: 1 }, speed: 18, jitter: 3.5,
+      size: 9, life: 0.26, gravity: 0, drag: 0.6, colors: [0xffffff, 0xffd9f2, 0x00ffa3],
+    });
+  }
+
+  /** Golden banana jackpot explosion. */
+  goldenBurst(x, y, z) {
+    this.spawn(x, y, z, {
+      count: 44, spread: 0.9, speed: 11, upBias: 1.0, size: 17, life: 1.0,
+      gravity: 10, drag: 0.9, colors: [0xffd700, 0xfff6c8, 0xffb700, 0xffffff],
+    });
+  }
+
+  /** Speed pad activation: teal ring pop. */
+  speedPadBurst(x, y, z) {
+    this.spawn(x, y, z, {
+      count: 20, spread: 1.6, dir: { x: 0, y: 1, z: 0 }, speed: 10, jitter: 5,
+      size: 13, life: 0.5, gravity: 6, drag: 1.2, colors: [0x00ffa3, 0xb6fff0, 0xffffff],
+    });
+  }
+
+  /** Dive-stomp landing shockwave. */
+  shockwave(x, y, z) {
+    this.spawn(x, y, z, {
+      count: 26, spread: 2.6, speed: 8, upBias: 0.12, size: 15, life: 0.45,
+      gravity: 4, drag: 1.8, colors: [0xd8c9ff, 0xff6ec7, 0xffffff, 0x9b5de5],
+    });
+  }
+
+  /** Hot toast impact crumbs. */
+  toastCrumbs(x, y, z) {
+    this.spawn(x, y, z, {
+      count: 14, spread: 0.5, speed: 6, upBias: 0.6, size: 9, life: 0.6,
+      gravity: 14, drag: 1.0, colors: [0xffb35c, 0xd9a066, 0xff5500],
+    });
+  }
+
   resetSpeedLines(playerZ) {
     for (let i = 0; i < MAX_SPEED_LINES; i++) {
       const m = this.lineMeta[i];
