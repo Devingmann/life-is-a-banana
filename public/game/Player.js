@@ -54,7 +54,7 @@ export class Player {
     this.flyingPeels = [];
     const shellMat = () => new THREE.MeshStandardMaterial({
       color: 0xffe135, transparent: true, opacity: 0.5,
-      emissive: 0xcaa500, emissiveIntensity: 0.35,
+      emissive: 0xcaa500, emissiveIntensity: 0.22,
       roughness: 0.45, depthWrite: false,
     });
     if (this.bodyMesh) {
@@ -84,7 +84,7 @@ export class Player {
     physics.registerPlayer(this.body);
 
     // ---- input & state ----
-    this.input = { left: false, right: false, boost: false };
+    this.input = { left: false, right: false, boost: false, down: false };
     this.jumpBuffered = 0;
     this.lastGroundedAt = -999;
     this.prevGrounded = false;
@@ -163,26 +163,39 @@ export class Player {
       if (ctx.onJump) ctx.onJump();
     }
 
+    // ---------- dive / fast-fall (S or ArrowDown while airborne) ----------
+    if (ctx.active && this.input.down && !onGround && v.y < 3) {
+      v.y = Math.min(v.y, -17); // rocket toward the road
+      if (this.squash > 0.9) this.squashVel = -3.2; // slight tuck
+    }
+
     // ---------- forward speed (paused during knockback stun) ----------
+    // When knocked backward (v.z > 0 means flying backwards, forward is -Z)
+    // recover with extra authority so a bump never becomes a crawl.
     const stunned = this.time < this.stunUntil;
-    const accel = coyote ? 6.5 : 2.4;
+    const accel = v.z > 0 ? 11 : (coyote ? 6.5 : 2.4);
     const desiredZ = ctx.active && !stunned ? -ctx.targetSpeed : 0;
     if (!stunned) v.z += (desiredZ - v.z) * Math.min(1, accel * dt);
     this.speed = Math.abs(v.z);
 
     // ---------- lateral steering ----------
+    // NOTE: with the chase camera behind the banana looking down -Z, world +X
+    // is the RIGHT side of the screen. 'left' must push toward -X (steer -1)
+    // and 'right' toward +X (steer +1) — the original signs were inverted,
+    // which made the banana steer the opposite way from the key pressed.
     let steer = 0;
     if (ctx.active) {
-      if (this.input.left) steer += 1;
-      if (this.input.right) steer -= 1;
+      if (this.input.left) steer -= 1;
+      if (this.input.right) steer += 1;
     }
     const slipping = this.slipUntil > this.time;
     let targetX = steer * LATERAL_SPEED * (coyote ? 1 : 0.55);
     if (slipping && ctx.active) {
-      // chaotic banana-peel drift: wobble + jitter impulses
+      // chaotic banana-peel drift: wobble + jitter impulses (tuned down —
+      // the old value could hurl the banana into the neon rails)
       targetX *= 0.45;
       targetX += Math.sin(this.time * 11.3) * 7.5;
-      v.x += (Math.random() - 0.5) * 34 * dt;
+      v.x += (Math.random() - 0.5) * 22 * dt;
     }
     if (!stunned) v.x += (targetX - v.x) * Math.min(1, (coyote ? 9 : 3.2) * dt);
 
@@ -219,10 +232,10 @@ export class Player {
       if (!m.emissive) continue;
       if (this.superT > 0.01) {
         m.emissive.setRGB(0.85 * this.superT + 0.05 * pulse * this.superT, 0.62 * this.superT, 0.1 * this.superT);
-        m.emissiveIntensity = 1.4 + 1.4 * this.superT;
+        m.emissiveIntensity = 0.9 + 0.9 * this.superT;
       } else {
         m.emissive.setHex(0x3a2a05);
-        m.emissiveIntensity = 0.5;
+        m.emissiveIntensity = 0.35;
       }
     }
     if (this.superT > 0.01) {
@@ -267,7 +280,7 @@ export class Player {
   /** Full reset (new run). */
   reset() {
     this.respawn(0, 1.6, 0);
-    this.input.left = this.input.right = this.input.boost = false;
+    this.input.left = this.input.right = this.input.boost = this.input.down = false;
     this.jumpBuffered = 0;
     this.lastGroundedAt = -999;
     this.invulnUntil = 0;
@@ -289,7 +302,7 @@ export class Player {
         const shell = this.bodyMesh.clone();
         shell.material = new THREE.MeshStandardMaterial({
           color: 0xffe135, transparent: true, opacity: 0.5,
-          emissive: 0xcaa500, emissiveIntensity: 0.35, roughness: 0.45, depthWrite: false,
+          emissive: 0xcaa500, emissiveIntensity: 0.22, roughness: 0.45, depthWrite: false,
         });
         shell.scale.multiplyScalar(s);
         shell.castShadow = false;

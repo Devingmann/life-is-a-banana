@@ -75,6 +75,7 @@ export class GameLogic {
     this.slipping = false;
     this._wasBoosting = false;
     this.time = 0;
+    this.goTime = 0;
   }
 
   /* ================= state transitions ================= */
@@ -138,6 +139,7 @@ export class GameLogic {
   gameOver(reason) {
     if (this.state !== State.PLAYING) return;
     this.state = State.GAMEOVER;
+    this.goTime = performance.now(); // guards accidental instant restarts
     this.sound.setIntensity('menu');
     this.sound.sfxGameOver();
     this.events.push({ type: 'slowmo', scale: 0.25, dur: 0.8 });
@@ -175,17 +177,25 @@ export class GameLogic {
         this.announce('SMASHED! +60', 'small');
         return;
       }
-      // Always bounce off comedically — damage is gated by invulnerability.
+      // The WHOLE response (bounce + damage) is gated by invulnerability and
+      // a per-obstacle cooldown. Previously the knockback fired on every new
+      // contact, so one bump could chain into the next obstacle and the run
+      // degenerated into a permanent stun-lock ("the banana stopped working").
+      const now = this.time;
+      if (now < this.invulnUntil) return;
+      if (body.userData.lastHit !== undefined && now - body.userData.lastHit < 0.8) return;
+      body.userData.lastHit = now;
+
+      // Softer comedic bounce: mostly sideways, a short backward hop, a
+      // brief hands-off-the-wheel stun. Recovery stays snappy.
       const v = this.player.body.velocity;
-      const knock = body.userData.knock || 8;
+      const knock = (body.userData.knock || 8) * 0.55;
       const side = Math.sign(this.player.position.x - body.position.x) || (Math.random() < 0.5 ? -1 : 1);
-      v.z = knock;                 // backward bounce (forward is -Z)
-      v.y += 6.5;
-      v.x = side * 6.5;            // sideways shove — slide past it
-      this.player.stun(0.55);      // hands off the wheel while flying
-      if (this.time >= this.invulnUntil) {
-        this.applyDamage(body.userData.damage || 1, 'peeled');
-      }
+      v.z = knock;                 // small backward hop (forward is -Z)
+      v.y += 5.2;
+      v.x = side * 5.5;            // sideways shove — slide past it
+      this.player.stun(0.3);
+      this.applyDamage(body.userData.damage || 1, 'peeled');
     } else if (kind === 'slipzone') {
       const now = this.time;
       if (body.userData.lastTrig !== undefined && now - body.userData.lastTrig < 2) return;

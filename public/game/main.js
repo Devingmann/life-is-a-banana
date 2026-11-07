@@ -34,6 +34,9 @@ class Game {
     this.envTime = 0;
     this.fov = 70;
     this._lastT = performance.now();
+    this._quality = 2;      // adaptive quality steps (2 = full)
+    this._fpsAcc = 0;
+    this._fpsFrames = 0;
 
     this._initRenderer();
     this._initScene();
@@ -52,10 +55,13 @@ class Game {
       this.dead = true;
       return;
     }
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    // Cap at 1.5: full 2x DPR quadruples the pixels the bloom pass has to
+    // chew on and is the #1 cause of frame drops (and the slow-motion that
+    // comes with it) on mid-range GPUs / laptops.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.12;
+    this.renderer.toneMappingExposure = 1.0;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.container.appendChild(this.renderer.domElement);
@@ -71,9 +77,9 @@ class Game {
 
     // ---- cinematic 3-point lighting ----
     // key: warm sun
-    this.keyLight = new THREE.DirectionalLight(0xfff2cf, 2.6);
+    this.keyLight = new THREE.DirectionalLight(0xfff2cf, 2.3);
     this.keyLight.castShadow = true;
-    this.keyLight.shadow.mapSize.set(2048, 2048);
+    this.keyLight.shadow.mapSize.set(1024, 1024);
     const sc = this.keyLight.shadow.camera;
     sc.left = -30; sc.right = 30; sc.top = 30; sc.bottom = -30; sc.near = 1; sc.far = 90;
     this.keyLight.shadow.bias = -0.0006;
@@ -89,13 +95,16 @@ class Game {
 
   _initPostFX() {
     const w = this.container.clientWidth, h = this.container.clientHeight;
-    const rt = new THREE.WebGLRenderTarget(w, h, { samples: 4, type: THREE.HalfFloatType });
+    const rt = new THREE.WebGLRenderTarget(w, h, { samples: 2, type: THREE.HalfFloatType });
     this.composer = new EffectComposer(this.renderer, rt);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.72, 0.5, 0.68);
+    // Tamer glow: higher threshold so only true highlights bloom, lower
+    // strength + radius so the scene stays readable instead of drowning
+    // in neon haze.
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.42, 0.45, 0.85);
     this.composer.addPass(this.bloom);
     this.rgbPass = new ShaderPass(RGBShiftShader);
-    this.rgbPass.uniforms.amount.value = 0.0007;
+    this.rgbPass.uniforms.amount.value = 0.0006;
     this.rgbPass.uniforms.angle.value = 0.6;
     this.composer.addPass(this.rgbPass);
     this.composer.addPass(new OutputPass());
@@ -142,24 +151,59 @@ class Game {
 
   /* ================= input ================= */
 
+  // Physical key codes are layout-independent: 'KeyA' is the key to the left
+  // of 'KeyS' whether the keyboard prints QWERTY or AZERTY. We also fall
+  // back to the printed character (e.key) for exotic setups, so the game
+  // steers correctly with ZQSD (AZERTY), WASD (QWERTY) AND arrow keys.
+  static KEY_ACTIONS = {
+    left: ['ArrowLeft', 'KeyA', 'KeyQ'],
+    right: ['ArrowRight', 'KeyD'],
+    jump: ['Space', 'ArrowUp', 'KeyW', 'KeyZ'],
+    dive: ['ArrowDown', 'KeyS'],
+  };
+  static KEY_CHARS = {
+    left: ['a', 'q', 'arrowleft'],
+    right: ['d', 'arrowright'],
+    jump: [' ', 'z', 'w', 'arrowup'],
+    dive: ['s', 'arrowdown'],
+  };
+
+  static resolveAction(e) {
+    const byCode = Game.KEY_ACTIONS;
+    for (const action in byCode) {
+      if (byCode[action].includes(e.code)) return action;
+    }
+    const k = typeof e.key === 'string' ? e.key.toLowerCase() : '';
+    if (k === '' || k === 'shift' || k === 'control' || k === 'alt' || k === 'meta') return null;
+    const byChar = Game.KEY_CHARS;
+    for (const action in byChar) {
+      if (byChar[action].includes(k)) return action;
+    }
+    return null;
+  }
+
   _bindInput() {
     const player = this.player, logic = this.logic;
 
-    const STEER = { ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right' };
+    // If the window/tab ever loses focus mid-press, the matching keyup never
+    // fires and a steering key stays "stuck" (banana drifting on its own
+    // after resuming). Hard-reset every held input instead.
+    const releaseAll = () => {
+      player.input.left = false;
+      player.input.right = false;
+      player.input.down = false;
+      player.input.boost = false;
+    };
 
     window.addEventListener('keydown', (e) => {
       if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(e.code)) e.preventDefault();
       if (e.repeat) return;
+
+      // meta keys (pause / mute / restart / turbo)
       switch (e.code) {
-        case 'ArrowLeft': case 'KeyA': player.input.left = true; break;
-        case 'ArrowRight': case 'KeyD': player.input.right = true; break;
-        case 'Space':
-          if (logic.state === State.MENU) logic.start();
-          else if (logic.state === State.PLAYING) player.queueJump();
-          break;
         case 'Enter':
           if (logic.state === State.MENU) logic.start();
-          else if (logic.state === State.GAMEOVER) logic.restart();
+          else if (logic.state === State.GAMEOVER && performance.now() - logic.goTime > 600) logic.restart();
           break;
         case 'KeyR':
           if (logic.state === State.GAMEOVER) logic.restart();
@@ -170,23 +214,41 @@ class Game {
           break;
         case 'KeyM': this._toggleMute(); break;
       }
-      void STEER;
+
+      // gameplay keys — QWERTY + AZERTY + arrows all resolve the same way
+      const action = Game.resolveAction(e);
+      if (!action) return;
+      if (action === 'left' || action === 'right') {
+        if (logic.state === State.PLAYING) player.input[action] = true;
+      } else if (action === 'dive') {
+        if (logic.state === State.PLAYING) player.input.down = true;
+      } else if (action === 'jump') {
+        if (logic.state === State.MENU) logic.start();
+        else if (logic.state === State.GAMEOVER) {
+          if (performance.now() - logic.goTime > 600) logic.restart();
+        } else if (logic.state === State.PLAYING) player.queueJump();
+      }
     });
 
     window.addEventListener('keyup', (e) => {
+      const action = Game.resolveAction(e);
+      if (action === 'left' || action === 'right') player.input[action] = false;
+      else if (action === 'dive') player.input.down = false;
       switch (e.code) {
-        case 'ArrowLeft': case 'KeyA': player.input.left = false; break;
-        case 'ArrowRight': case 'KeyD': player.input.right = false; break;
         case 'ShiftLeft': case 'ShiftRight': player.input.boost = false; break;
       }
     });
 
-    // auto-pause when the tab loses focus
+    // auto-pause when the tab loses focus (and never leave a key stuck)
     window.addEventListener('blur', () => {
+      releaseAll();
       if (logic.state === State.PLAYING) logic.togglePause();
     });
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden && logic.state === State.PLAYING) logic.togglePause();
+      if (document.hidden) {
+        releaseAll();
+        if (logic.state === State.PLAYING) logic.togglePause();
+      }
     });
 
     // ---- touch controls ----
@@ -332,6 +394,38 @@ class Game {
     this._updateCamera(rawDt);
     this._updateEffects(rawDt);
     this.composer.render();
+
+    // ---- adaptive quality (keeps the game smooth on weak GPUs) ----
+    // If the average frame rate dips, shed pixel ratio first, then shadows.
+    // This directly fights the "game slows to a crawl" feel on laptops.
+    this._fpsAcc += rawDt;
+    this._fpsFrames += 1;
+    if (this._fpsFrames >= 90 && this._fpsAcc > 0.01) {
+      const avgFps = this._fpsFrames / this._fpsAcc;
+      this._fpsAcc = 0;
+      this._fpsFrames = 0;
+      if (avgFps < 42 && this._quality > 0) this._downgradeQuality();
+    }
+  }
+
+  _downgradeQuality() {
+    this._quality -= 1;
+    const w = this.container.clientWidth, h = this.container.clientHeight;
+    if (this._quality === 1) {
+      this.renderer.setPixelRatio(1);
+      this.composer.setPixelRatio(1);
+      this.composer.setSize(w, h);
+      console.info('[main] adaptive quality: pixel ratio -> 1');
+    } else if (this._quality === 0) {
+      this.renderer.shadowMap.enabled = false;
+      this.scene.traverse((o) => {
+        if (o.material) {
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          for (const m of mats) m.needsUpdate = true;
+        }
+      });
+      console.info('[main] adaptive quality: shadows off');
+    }
   }
 
   _updateCamera(dt) {
@@ -371,12 +465,12 @@ class Game {
       this.camera.fov = this.fov;
       this.camera.updateProjectionMatrix();
     }
-    // bloom breathing
-    const bloomTarget = 0.85 + this.logic.boostFactor * 0.3 + this.player.superT * 0.85;
+    // bloom breathing (kept subtle: super mode should pop, not blind)
+    const bloomTarget = 0.45 + this.logic.boostFactor * 0.18 + this.player.superT * 0.5;
     this.bloom.strength += (bloomTarget - this.bloom.strength) * Math.min(1, dt * 4);
     // chromatic aberration
     this.rgbPulse = Math.max(0, this.rgbPulse - dt * 0.006);
-    const rgbTarget = 0.0007 + this.logic.boostFactor * 0.0032 + this.player.superT * 0.0018 + this.rgbPulse;
+    const rgbTarget = 0.0006 + this.logic.boostFactor * 0.0026 + this.player.superT * 0.0014 + this.rgbPulse;
     this.rgbPass.uniforms.amount.value += (rgbTarget - this.rgbPass.uniforms.amount.value) * Math.min(1, dt * 7);
   }
 }

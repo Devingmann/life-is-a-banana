@@ -84,9 +84,9 @@ export class Environment {
     // --- road ---
     this.roadTex = this._makeRoadTexture();
     this.matRoad = new THREE.MeshStandardMaterial({ map: this.roadTex, roughness: 0.85, metalness: 0.15 });
-    this.matEdge = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 1.7, roughness: 0.4 });
+    this.matEdge = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 0.85, roughness: 0.4 });
     this.geoEdge = new THREE.BoxGeometry(1, 1, 1); // scaled per segment
-    this.matWarn = new THREE.MeshStandardMaterial({ color: 0xff6a00, emissive: 0xff4d00, emissiveIntensity: 2.6 });
+    this.matWarn = new THREE.MeshStandardMaterial({ color: 0xff6a00, emissive: 0xff4d00, emissiveIntensity: 1.2 });
     this.geoWarn = new THREE.BoxGeometry(ROAD_W, 0.09, 0.8);
 
     // --- flat colored material for merged meshes ---
@@ -96,7 +96,7 @@ export class Environment {
     // --- potassium star ---
     this.geoStar = this._makeStarGeometry();
     this.matStar = new THREE.MeshStandardMaterial({
-      color: COL.gold, emissive: COL.gold, emissiveIntensity: 1.9,
+      color: COL.gold, emissive: COL.gold, emissiveIntensity: 1.0,
       roughness: 0.3, metalness: 0.7,
     });
 
@@ -111,10 +111,10 @@ export class Environment {
 
     // --- slip-zone peel bits ---
     this.geoPeel = new THREE.BoxGeometry(0.55, 0.1, 1.05);
-    this.matPeel = new THREE.MeshStandardMaterial({ color: COL.banana, emissive: 0xcaa500, emissiveIntensity: 0.3, roughness: 0.5 });
+    this.matPeel = new THREE.MeshStandardMaterial({ color: COL.banana, emissive: 0xcaa500, emissiveIntensity: 0.22, roughness: 0.5 });
 
     // --- banana moons ---
-    this.moonMat = new THREE.MeshStandardMaterial({ color: 0xffdf6b, emissive: 0xffca28, emissiveIntensity: 1.5, roughness: 0.5 });
+    this.moonMat = new THREE.MeshStandardMaterial({ color: 0xffdf6b, emissive: 0xffca28, emissiveIntensity: 0.8, roughness: 0.5 });
     this.moonTemplate = bananaTemplate ? bananaTemplate.clone(true) : null;
     if (this.moonTemplate) {
       this.moonTemplate.traverse((o) => {
@@ -124,8 +124,8 @@ export class Environment {
 
     // --- neon arch ---
     this.geoArch = new THREE.TorusGeometry(8.4, 0.3, 10, 42);
-    this.matArchPink = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 1.8, roughness: 0.4 });
-    this.matArchTeal = new THREE.MeshStandardMaterial({ color: COL.teal, emissive: COL.teal, emissiveIntensity: 1.6, roughness: 0.4 });
+    this.matArchPink = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 0.9, roughness: 0.4 });
+    this.matArchTeal = new THREE.MeshStandardMaterial({ color: COL.teal, emissive: COL.teal, emissiveIntensity: 0.8, roughness: 0.4 });
 
     // --- grid floor ---
     this.gridTex = this._makeGridTexture();
@@ -231,9 +231,9 @@ export class Environment {
     this.geoPalmRings = mergeGeometries(ringParts, false);
     this.geoPalmFronds = mergeGeometries(frondParts, false);
     this.matPalmSil = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
-    this.matPalmRings = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 2.4 });
+    this.matPalmRings = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 1.1 });
     this.matPalmFronds = new THREE.MeshStandardMaterial({
-      color: 0x0e2b1f, emissive: COL.teal, emissiveIntensity: 1.35, roughness: 0.6, side: THREE.DoubleSide,
+      color: 0x0e2b1f, emissive: COL.teal, emissiveIntensity: 0.65, roughness: 0.6, side: THREE.DoubleSide,
     });
   }
 
@@ -285,7 +285,7 @@ export class Environment {
     // glowing slots
     const slot = new THREE.BoxGeometry(0.52, 0.1, 0.78);
     this.geoSlots = mergeGeometries([part(slot, 0, [0.3, 1.0, 0]), part(slot, 0, [-0.3, 1.0, 0])], false);
-    this.matSlots = new THREE.MeshStandardMaterial({ color: 0xff3300, emissive: 0xff4400, emissiveIntensity: 2.8 });
+    this.matSlots = new THREE.MeshStandardMaterial({ color: 0xff3300, emissive: 0xff4400, emissiveIntensity: 1.3 });
     // pop-up toast
     this.geoToast = new THREE.BoxGeometry(0.46, 0.3, 0.7);
     this.matToast = new THREE.MeshStandardMaterial({ color: 0xd9a066, roughness: 0.9 });
@@ -316,10 +316,10 @@ export class Environment {
       part(fin, 0, [0, 0.95, 0], [0, Math.PI / 4, 0]),
       part(fin, 0, [0, 0.95, 0], [0, (Math.PI * 3) / 4, 0]),
     ], false);
-    this.matBlades = new THREE.MeshStandardMaterial({ color: 0x4a2a6b, emissive: COL.purple, emissiveIntensity: 2.2, metalness: 0.7, roughness: 0.3 });
+    this.matBlades = new THREE.MeshStandardMaterial({ color: 0x4a2a6b, emissive: COL.purple, emissiveIntensity: 1.0, metalness: 0.7, roughness: 0.3 });
     // glowing smoothie vortex inside
     this.geoSmoothie = new THREE.CylinderGeometry(1.5, 1.25, 2.4, 16);
-    this.matSmoothie = new THREE.MeshStandardMaterial({ color: 0xff2e92, emissive: 0xff2e92, emissiveIntensity: 1.6, transparent: true, opacity: 0.4 });
+    this.matSmoothie = new THREE.MeshStandardMaterial({ color: 0xff2e92, emissive: 0xff2e92, emissiveIntensity: 0.8, transparent: true, opacity: 0.4 });
   }
 
   /* ================================================================
@@ -611,7 +611,7 @@ export class Environment {
         const h = 0.85 + Math.pow(pop, 3) * 0.75;
         toasts[0].position.y = h;
         toasts[1].position.y = 0.85 + Math.pow(Math.max(0, Math.sin(t * 1.7 + phase + 0.7)), 3) * 0.75;
-        slots.material.emissiveIntensity = 2.2 + Math.pow(pop, 4) * 3.5;
+        slots.material.emissiveIntensity = 1.05 + Math.pow(pop, 4) * 1.6;
       });
       body = this.physics.addStaticBox({ x: 0.75, y: 0.55, z: 0.62 }, { x, y: 0.55, z: zEnd + lz }, { userData: { type } });
     } else {

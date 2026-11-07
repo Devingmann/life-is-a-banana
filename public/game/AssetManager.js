@@ -136,7 +136,7 @@ export class AssetManager {
         if (obj.material && obj.material.isMeshStandardMaterial) {
           obj.material.roughness = Math.min(obj.material.roughness, 0.55);
           obj.material.emissive = new THREE.Color(0x3a2a05);
-          obj.material.emissiveIntensity = 0.5;
+          obj.material.emissiveIntensity = 0.35;
           if (!this.bananaBodyGeometry) this.bananaBodyGeometry = obj.geometry;
         }
       }
@@ -189,7 +189,7 @@ export class AssetManager {
       roughness: 0.4,
       metalness: 0.05,
       emissive: 0x3a2a05,
-      emissiveIntensity: 0.5,
+      emissiveIntensity: 0.35,
     });
     const body = new THREE.Mesh(tube, bananaMat);
     body.castShadow = true;
