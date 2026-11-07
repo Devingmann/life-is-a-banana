@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="description" content="Life is a Banana: The Cosmic Slip - a synthwave physics arcade runner. La vie est une banane." />
+  <title>Life is a Banana: The Cosmic Slip</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M7 24 Q13 29 23 14' stroke='%23FFE135' stroke-width='7' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Orbitron:wght@500;700;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./styles.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three.module.js",
+      "three/addons/": "./vendor/jsm/",
+      "cannon-es": "./vendor/cannon-es.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- WebGL canvas mount point -->
+  <div id="game-container" aria-label="3D game viewport"></div>
+
+  <!-- Cosmetic overlays -->
+  <div id="vignette" aria-hidden="true"></div>
+  <div id="scanlines" aria-hidden="true"></div>
+
+  <!-- Loading screen -->
+  <div id="loading-screen" role="status" aria-label="Loading game assets">
+    <div class="loader-banana" aria-hidden="true">
+      <svg viewBox="0 0 64 64" width="72" height="72">
+        <path d="M14 50 Q26 58 46 26" stroke="#FFE135" stroke-width="13" fill="none" stroke-linecap="round" />
+        <circle cx="14" cy="50" r="4.5" fill="#7A4A1D" />
+        <circle cx="46" cy="26" r="4.5" fill="#7A4A1D" />
+      </svg>
+    </div>
+    <div class="loader-title">LIFE IS A BANANA</div>
+    <div class="loader-sub">PEELING THE UNIVERSE...</div>
+    <div class="loader-bar"><div id="loader-fill"></div></div>
+    <div id="loader-pct">0%</div>
+  </div>
+
+  <!-- Main menu -->
+  <div id="menu" class="overlay hidden">
+    <div class="menu-inner glass">
+      <h1 class="game-title">LIFE IS A<br /><span>BANANA</span></h1>
+      <div class="game-subtitle">THE COSMIC SLIP</div>
+      <div class="game-tagline">&laquo;&nbsp;La vie est une banane&nbsp;&raquo;</div>
+      <div id="menu-best" class="menu-best">BEST SCORE: 0</div>
+      <div class="controls-grid">
+        <div class="control-row"><span class="key-group"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span class="control-desc">Steer the banana</span></div>
+        <div class="control-row"><span class="key-group"><kbd>ARROWS</kbd></span><span class="control-desc">also steers</span></div>
+        <div class="control-row"><span class="key-group"><kbd>SPACE</kbd></span><span class="control-desc">Jump the voids</span></div>
+        <div class="control-row"><span class="key-group"><kbd>SHIFT</kbd></span><span class="control-desc">Banana Split Turbo</span></div>
+        <div class="control-row"><span class="key-group"><kbd>P</kbd></span><span class="control-desc">Pause&nbsp;&middot;&nbsp;<kbd>M</kbd> mute</span></div>
+      </div>
+      <button id="btn-start" class="btn btn-start">START SLIPPING</button>
+      <div class="credits">
+        Banana model: Kenney Food Kit (CC0) &middot; procedural fallback built-in<br />
+        Engine: three.js + cannon-es &middot; Music &amp; SFX: 100% procedural Web Audio
+      </div>
+    </div>
+  </div>
+
+  <!-- Game over screen -->
+  <div id="gameover" class="overlay hidden">
+    <div class="menu-inner glass">
+      <h2 class="go-title">EXISTENTIALLY<br />PEELED</h2>
+      <div id="go-reason" class="go-reason">The universe slipped on you.</div>
+      <div class="go-stats">
+        <div class="go-stat"><span class="go-label">SCORE</span><span id="go-score" class="go-value">0</span></div>
+        <div class="go-stat"><span class="go-label">DISTANCE</span><span id="go-dist" class="go-value">0 m</span></div>
+        <div class="go-stat"><span class="go-label">POTASSIUM</span><span id="go-stars" class="go-value">0</span></div>
+        <div class="go-stat"><span class="go-label">BEST</span><span id="go-best" class="go-value">0</span></div>
+      </div>
+      <div id="go-newbest" class="newbest hidden">NEW COSMIC RECORD!</div>
+      <button id="btn-restart" class="btn btn-start">RE-PEEL &amp; RETRY</button>
+      <div class="hint">or press <kbd>R</kbd></div>
+    </div>
+  </div>
+
+  <!-- Pause screen -->
+  <div id="paused" class="overlay hidden">
+    <div class="menu-inner glass small">
+      <h2 class="pause-title">PAUSED</h2>
+      <div class="pause-sub">The banana contemplates existence.</div>
+      <button id="btn-resume" class="btn btn-start">RESUME</button>
+      <button id="btn-quit" class="btn btn-ghost">BACK TO MENU</button>
+    </div>
+  </div>
+
+  <!-- In-game HUD -->
+  <div id="hud" class="hidden" aria-label="Game HUD">
+    <div class="hud-top">
+      <div class="hud-panel glass hud-left">
+        <div class="hud-label">PEEL INTEGRITY</div>
+        <div id="peel-icons" class="peel-icons">
+          <svg class="peel-icon" viewBox="0 0 32 32"><path d="M7 24 Q13 29 23 14" stroke="#FFE135" stroke-width="7" fill="none" stroke-linecap="round" /></svg>
+          <svg class="peel-icon" viewBox="0 0 32 32"><path d="M7 24 Q13 29 23 14" stroke="#FFE135" stroke-width="7" fill="none" stroke-linecap="round" /></svg>
+          <svg class="peel-icon" viewBox="0 0 32 32"><path d="M7 24 Q13 29 23 14" stroke="#FFE135" stroke-width="7" fill="none" stroke-linecap="round" /></svg>
+          <svg class="peel-icon" viewBox="0 0 32 32"><path d="M7 24 Q13 29 23 14" stroke="#FFE135" stroke-width="7" fill="none" stroke-linecap="round" /></svg>
+        </div>
+      </div>
+      <div class="hud-panel glass hud-center">
+        <div class="hud-label">SCORE</div>
+        <div id="hud-score" class="hud-big">0</div>
+        <div id="hud-dist" class="hud-small">0 m</div>
+      </div>
+      <div class="hud-panel glass hud-right">
+        <div class="meter-row">
+          <div class="hud-label">POTASSIUM</div>
+          <div class="meter"><div id="k-fill" class="meter-fill k"></div></div>
+        </div>
+        <div class="meter-row">
+          <div class="hud-label">TURBO</div>
+          <div class="meter"><div id="boost-fill" class="meter-fill boost"></div></div>
+        </div>
+        <div class="speed-row">
+          <span id="hud-speed" class="hud-speed">0</span><span class="hud-speed-unit">km/h</span>
+          <span id="hud-mult" class="hud-mult hidden">&times;2</span>
+        </div>
+      </div>
+    </div>
+    <div class="hud-buttons">
+      <button id="btn-mute" class="icon-btn glass" title="Mute (M)" aria-label="Mute">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path id="mute-waves" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+      </button>
+      <button id="btn-pause" class="icon-btn glass" title="Pause (P)" aria-label="Pause">
+        <svg viewBox="0 0 24 24" width="20" height="20"><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Floating announcements -->
+  <div id="announce-layer" aria-live="polite"></div>
+
+  <!-- Touch controls (shown on coarse pointers) -->
+  <div id="mobile-controls" class="hidden">
+    <div class="touch-left">
+      <button id="tc-left" class="touch-btn glass" aria-label="Move left">
+        <svg viewBox="0 0 24 24" width="34" height="34"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button id="tc-right" class="touch-btn glass" aria-label="Move right">
+        <svg viewBox="0 0 24 24" width="34" height="34"><path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+    <div class="touch-right">
+      <button id="tc-boost" class="touch-btn glass small" aria-label="Turbo boost">TURBO</button>
+      <button id="tc-jump" class="touch-btn glass big" aria-label="Jump">JUMP</button>
+    </div>
+  </div>
+
+  <!-- WebGL error -->
+  <div id="webgl-error" class="overlay hidden">
+    <div class="menu-inner glass">
+      <h2 class="go-title">NO WEBGL</h2>
+      <div class="go-reason">This banana needs WebGL to tumble through the cosmos. Please use a modern browser with hardware acceleration enabled.</div>
+    </div>
+  </div>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
