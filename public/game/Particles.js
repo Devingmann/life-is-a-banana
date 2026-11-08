@@ -147,23 +147,24 @@ export class Particles {
   /** Banana peel shrapnel on damage */
   peelBurst(x, y, z) {
     this.spawn(x, y, z, {
-      count: 30, spread: 0.9, speed: 9, upBias: 1.1, size: 16, life: 1.0,
+      count: 22, spread: 0.9, speed: 9, upBias: 1.1, size: 12, life: 0.9,
       gravity: 16, drag: 0.7, colors: [0xffe135, 0xf5c71a, 0xfff2a0, 0xd9a90f],
     });
   }
 
-  /** Potassium sparkle on star pickup */
+  /** Potassium sparkle on star pickup (small on purpose: additive gold
+   *  particles + bloom used to stack into a full whiteout) */
   starSparkle(x, y, z) {
     this.spawn(x, y, z, {
-      count: 16, spread: 0.4, speed: 5.5, upBias: 0.45, size: 12, life: 0.55,
+      count: 9, spread: 0.4, speed: 4.5, upBias: 0.45, size: 7, life: 0.4,
       gravity: -2, drag: 2.4, colors: [0xffd24a, 0xfff6c8, 0xffb347],
     });
   }
 
-  /** Obstacle smashed during Super Yellow Mode */
+  /** Obstacle smashed (Super Yellow Mode / banana missile) */
   smashBurst(x, y, z) {
     this.spawn(x, y, z, {
-      count: 34, spread: 1.2, speed: 12, upBias: 0.9, size: 15, life: 0.9,
+      count: 22, spread: 1.2, speed: 12, upBias: 0.9, size: 11, life: 0.8,
       gravity: 12, drag: 0.8, colors: [0xffe135, 0xff2e92, 0xffffff, 0xff6ec7],
     });
   }
@@ -171,7 +172,7 @@ export class Particles {
   /** Super-mode golden trail */
   goldenTrail(x, y, z) {
     this.spawn(x, y, z, {
-      count: 3, spread: 0.35, speed: 1.2, upBias: 0.3, size: 13, life: 0.7,
+      count: 2, spread: 0.35, speed: 1.2, upBias: 0.3, size: 8, life: 0.45,
       gravity: -1.5, drag: 2.0, colors: [0xffd24a, 0xfff6c8],
     });
   }
@@ -179,7 +180,7 @@ export class Particles {
   /** Void fall purple implosion */
   voidBurst(x, y, z) {
     this.spawn(x, y, z, {
-      count: 26, spread: 1.4, speed: 8, upBias: -0.6, size: 17, life: 0.8,
+      count: 20, spread: 1.4, speed: 8, upBias: -0.6, size: 12, life: 0.75,
       gravity: -6, drag: 1.2, colors: [0x9b5de5, 0xff2e92, 0x160a2e, 0xff6ec7],
     });
   }
@@ -189,15 +190,15 @@ export class Particles {
   /** Near-miss graze: fast white streaks whipping past the camera. */
   nearMissStreak(x, y, z) {
     this.spawn(x, y, z, {
-      count: 12, spread: 0.8, dir: { x: 0, y: 0, z: 1 }, speed: 18, jitter: 3.5,
-      size: 9, life: 0.26, gravity: 0, drag: 0.6, colors: [0xffffff, 0xffd9f2, 0x00ffa3],
+      count: 9, spread: 0.8, dir: { x: 0, y: 0, z: 1 }, speed: 18, jitter: 3.5,
+      size: 7, life: 0.24, gravity: 0, drag: 0.6, colors: [0xffffff, 0xffd9f2, 0x00ffa3],
     });
   }
 
   /** Golden banana jackpot explosion. */
   goldenBurst(x, y, z) {
     this.spawn(x, y, z, {
-      count: 44, spread: 0.9, speed: 11, upBias: 1.0, size: 17, life: 1.0,
+      count: 26, spread: 0.9, speed: 11, upBias: 1.0, size: 12, life: 0.85,
       gravity: 10, drag: 0.9, colors: [0xffd700, 0xfff6c8, 0xffb700, 0xffffff],
     });
   }
@@ -205,15 +206,15 @@ export class Particles {
   /** Speed pad activation: teal ring pop. */
   speedPadBurst(x, y, z) {
     this.spawn(x, y, z, {
-      count: 20, spread: 1.6, dir: { x: 0, y: 1, z: 0 }, speed: 10, jitter: 5,
-      size: 13, life: 0.5, gravity: 6, drag: 1.2, colors: [0x00ffa3, 0xb6fff0, 0xffffff],
+      count: 14, spread: 1.6, dir: { x: 0, y: 1, z: 0 }, speed: 10, jitter: 5,
+      size: 10, life: 0.45, gravity: 6, drag: 1.2, colors: [0x00ffa3, 0xb6fff0, 0xffffff],
     });
   }
 
   /** Dive-stomp landing shockwave. */
   shockwave(x, y, z) {
     this.spawn(x, y, z, {
-      count: 26, spread: 2.6, speed: 8, upBias: 0.12, size: 15, life: 0.45,
+      count: 18, spread: 2.6, speed: 8, upBias: 0.12, size: 11, life: 0.42,
       gravity: 4, drag: 1.8, colors: [0xd8c9ff, 0xff6ec7, 0xffffff, 0x9b5de5],
     });
   }
@@ -221,7 +222,7 @@ export class Particles {
   /** Hot toast impact crumbs. */
   toastCrumbs(x, y, z) {
     this.spawn(x, y, z, {
-      count: 14, spread: 0.5, speed: 6, upBias: 0.6, size: 9, life: 0.6,
+      count: 10, spread: 0.5, speed: 6, upBias: 0.6, size: 8, life: 0.55,
       gravity: 14, drag: 1.0, colors: [0xffb35c, 0xd9a066, 0xff5500],
     });
   }
@@ -264,7 +265,7 @@ export class Particles {
     g.attributes.aSize.needsUpdate = true;
 
     // --- speed lines ---
-    const targetOpacity = ctx.boostFactor * 0.85;
+    const targetOpacity = ctx.boostFactor * 0.55;
     this.lineOpacity += (targetOpacity - this.lineOpacity) * Math.min(1, dt * 6);
     this.lineMat.opacity = this.lineOpacity;
     if (this.lineOpacity > 0.02) {

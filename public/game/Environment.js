@@ -131,9 +131,9 @@ export class Environment {
     // --- road ---
     this.roadTex = this._makeRoadTexture();
     this.matRoad = new THREE.MeshStandardMaterial({ map: this.roadTex, roughness: 0.85, metalness: 0.15 });
-    this.matEdge = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 0.85, roughness: 0.4 });
+    this.matEdge = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 0.75, roughness: 0.4 });
     this.geoEdge = new THREE.BoxGeometry(1, 1, 1); // scaled per segment
-    this.matWarn = new THREE.MeshStandardMaterial({ color: 0xff6a00, emissive: 0xff4d00, emissiveIntensity: 1.2 });
+    this.matWarn = new THREE.MeshStandardMaterial({ color: 0xff6a00, emissive: 0xff4d00, emissiveIntensity: 0.9 });
     this.geoWarn = new THREE.BoxGeometry(ROAD_W, 0.09, 0.8);
 
     // --- flat colored material for merged meshes ---
@@ -143,13 +143,13 @@ export class Environment {
     // --- potassium star ---
     this.geoStar = this._makeStarGeometry();
     this.matStar = new THREE.MeshStandardMaterial({
-      color: COL.gold, emissive: COL.gold, emissiveIntensity: 1.0,
+      color: COL.gold, emissive: COL.gold, emissiveIntensity: 0.85,
       roughness: 0.3, metalness: 0.7,
     });
 
     // --- golden banana pickup ---
     this.matGolden = new THREE.MeshStandardMaterial({
-      color: 0xffd700, emissive: 0xffb700, emissiveIntensity: 1.35,
+      color: 0xffd700, emissive: 0xffb700, emissiveIntensity: 1.0,
       roughness: 0.22, metalness: 0.85,
     });
     this.goldenTemplate = bananaTemplate ? bananaTemplate.clone(true) : null;
@@ -171,18 +171,18 @@ export class Environment {
 
     // --- slip-zone peel bits ---
     this.geoPeel = new THREE.BoxGeometry(0.55, 0.1, 1.05);
-    this.matPeel = new THREE.MeshStandardMaterial({ color: COL.banana, emissive: 0xcaa500, emissiveIntensity: 0.22, roughness: 0.5 });
+    this.matPeel = new THREE.MeshStandardMaterial({ color: COL.banana, emissive: 0xcaa500, emissiveIntensity: 0.2, roughness: 0.5 });
 
     // --- speed pad (turbo chevrons) ---
     this.geoPad = new THREE.PlaneGeometry(2.7, 4.6);
     this.geoPad.rotateX(-Math.PI / 2);
-    this.matPad = new THREE.MeshBasicMaterial({ map: this._makePadTexture(), transparent: true, opacity: 0.96 });
+    this.matPad = new THREE.MeshBasicMaterial({ map: this._makePadTexture(), transparent: true, opacity: 0.9 });
 
     // --- billboards ---
     this._buildBillboards();
 
     // --- banana moons ---
-    this.moonMat = new THREE.MeshStandardMaterial({ color: 0xffdf6b, emissive: 0xffca28, emissiveIntensity: 0.8, roughness: 0.5 });
+    this.moonMat = new THREE.MeshStandardMaterial({ color: 0xffdf6b, emissive: 0xffca28, emissiveIntensity: 0.65, roughness: 0.5 });
     this.moonTemplate = bananaTemplate ? bananaTemplate.clone(true) : null;
     if (this.moonTemplate) {
       this.moonTemplate.traverse((o) => {
@@ -192,8 +192,8 @@ export class Environment {
 
     // --- neon arch ---
     this.geoArch = new THREE.TorusGeometry(8.4, 0.3, 10, 42);
-    this.matArchPink = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 0.9, roughness: 0.4 });
-    this.matArchTeal = new THREE.MeshStandardMaterial({ color: COL.teal, emissive: COL.teal, emissiveIntensity: 0.8, roughness: 0.4 });
+    this.matArchPink = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 0.75, roughness: 0.4 });
+    this.matArchTeal = new THREE.MeshStandardMaterial({ color: COL.teal, emissive: COL.teal, emissiveIntensity: 0.7, roughness: 0.4 });
 
     // --- grid floor ---
     this.gridTex = this._makeGridTexture();
@@ -323,9 +323,9 @@ export class Environment {
     this.geoPalmRings = mergeGeometries(ringParts, false);
     this.geoPalmFronds = mergeGeometries(frondParts, false);
     this.matPalmSil = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
-    this.matPalmRings = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 1.1 });
+    this.matPalmRings = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 0.9 });
     this.matPalmFronds = new THREE.MeshStandardMaterial({
-      color: 0x0e2b1f, emissive: COL.teal, emissiveIntensity: 0.65, roughness: 0.6, side: THREE.DoubleSide,
+      color: 0x0e2b1f, emissive: COL.teal, emissiveIntensity: 0.55, roughness: 0.6, side: THREE.DoubleSide,
     });
   }
 
@@ -377,7 +377,7 @@ export class Environment {
     // glowing slots
     const slot = new THREE.BoxGeometry(0.52, 0.1, 0.78);
     this.geoSlots = mergeGeometries([part(slot, 0, [0.3, 1.0, 0]), part(slot, 0, [-0.3, 1.0, 0])], false);
-    this.matSlots = new THREE.MeshStandardMaterial({ color: 0xff3300, emissive: 0xff4400, emissiveIntensity: 1.3 });
+    this.matSlots = new THREE.MeshStandardMaterial({ color: 0xff3300, emissive: 0xff4400, emissiveIntensity: 0.9 });
     // pop-up toast
     this.geoToast = new THREE.BoxGeometry(0.46, 0.3, 0.7);
     this.matToast = new THREE.MeshStandardMaterial({ color: 0xd9a066, roughness: 0.9 });
@@ -412,10 +412,10 @@ export class Environment {
       part(fin, 0, [0, 0.95, 0], [0, Math.PI / 4, 0]),
       part(fin, 0, [0, 0.95, 0], [0, (Math.PI * 3) / 4, 0]),
     ], false);
-    this.matBlades = new THREE.MeshStandardMaterial({ color: 0x4a2a6b, emissive: COL.purple, emissiveIntensity: 1.0, metalness: 0.7, roughness: 0.3 });
+    this.matBlades = new THREE.MeshStandardMaterial({ color: 0x4a2a6b, emissive: COL.purple, emissiveIntensity: 0.85, metalness: 0.7, roughness: 0.3 });
     // glowing smoothie vortex inside
     this.geoSmoothie = new THREE.CylinderGeometry(1.5, 1.25, 2.4, 16);
-    this.matSmoothie = new THREE.MeshStandardMaterial({ color: 0xff2e92, emissive: 0xff2e92, emissiveIntensity: 0.8, transparent: true, opacity: 0.4 });
+    this.matSmoothie = new THREE.MeshStandardMaterial({ color: 0xff2e92, emissive: 0xff2e92, emissiveIntensity: 0.6, transparent: true, opacity: 0.4 });
   }
 
   _buildJuicer() {
@@ -437,7 +437,7 @@ export class Environment {
       part(armBox, 0, [1.85, 0, 0]),
       part(tip, 0, [3.68, 0, 0]),
     ], false);
-    this.matJuicerArm = new THREE.MeshStandardMaterial({ color: 0xff2255, emissive: 0xff2255, emissiveIntensity: 1.5, roughness: 0.3, metalness: 0.4 });
+    this.matJuicerArm = new THREE.MeshStandardMaterial({ color: 0xff2255, emissive: 0xff2255, emissiveIntensity: 1.15, roughness: 0.3, metalness: 0.4 });
   }
 
   _buildBillboards() {
@@ -509,7 +509,7 @@ export class Environment {
     sunTex.colorSpace = THREE.SRGBColorSpace;
     this.sun = new THREE.Mesh(
       new THREE.PlaneGeometry(120, 120),
-      new THREE.MeshBasicMaterial({ map: sunTex, transparent: true, fog: false, depthWrite: false, blending: THREE.AdditiveBlending })
+      new THREE.MeshBasicMaterial({ map: sunTex, transparent: true, opacity: 0.88, fog: false, depthWrite: false, blending: THREE.AdditiveBlending })
     );
     this.sun.renderOrder = -10;
     this.scene.add(this.sun);
@@ -533,7 +533,7 @@ export class Environment {
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
     this.starfield = new THREE.Points(g, new THREE.PointsMaterial({
-      size: 1.8, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.85, fog: false, depthWrite: false,
+      size: 1.8, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.7, fog: false, depthWrite: false,
     }));
     this.starfield.renderOrder = -11;
     this.scene.add(this.starfield);
@@ -774,7 +774,7 @@ export class Environment {
 
   _addObstacle(chunk, type, lz, rng, D) {
     const zEnd = chunk.zEnd;
-    let mesh, body, damage = 1, knock = 7, extraBody = null, nmDist = 2.05;
+    let mesh, body, damage = 1, knock = 7, extraBody = null, nmDist = 2.05, hitC = null;
 
     if (type === 'monkey') {
       mesh = new THREE.Mesh(this.geoMonkey, this.matFlat);
@@ -790,6 +790,7 @@ export class Environment {
         const baseX = THREE.MathUtils.clamp(x, -ROAD_HALF * 0.55 + 1, ROAD_HALF * 0.55 - 1) * 0.4;
         const mphase = rng() * Math.PI * 2;
         body = this.physics.addStaticBox({ x: 0.62, y: 0.75, z: 0.6 }, { x, y: 0.75, z: zEnd + lz }, { userData: { type, moving: true } });
+        hitC = { y: 0.8, r: 1.4 };
         chunk.anims.push((t) => {
           const mx = baseX + Math.sin(t * spd + mphase) * amp;
           mesh.position.x = THREE.MathUtils.clamp(mx, -5.2, 5.2);
@@ -803,6 +804,7 @@ export class Environment {
           mesh.rotation.z = Math.sin(t * 1.6 + phase) * 0.07;
         });
         body = this.physics.addStaticBox({ x: 0.62, y: 0.75, z: 0.6 }, { x, y: 0.75, z: zEnd + lz }, { userData: { type } });
+        hitC = { y: 0.8, r: 1.4 };
       }
     } else if (type === 'gorilla') {
       mesh = new THREE.Group();
@@ -833,6 +835,7 @@ export class Environment {
         mesh.position.y = Math.abs(Math.sin(t * 2 + phase)) * 0.12;
       });
       damage = 2; knock = 11; nmDist = 2.5;
+      hitC = { y: 1.3, r: 2.1 };
       body = this.physics.addStaticBox({ x: 1.05, y: 1.35, z: 0.85 }, { x, y: 1.35, z: zEnd + lz }, { userData: { type } });
     } else if (type === 'toaster') {
       mesh = new THREE.Group();
@@ -856,8 +859,9 @@ export class Environment {
         const h = 0.85 + Math.pow(pop, 3) * 0.75;
         toasts[0].position.y = h;
         toasts[1].position.y = 0.85 + Math.pow(Math.max(0, Math.sin(t * 1.7 + phase + 0.7)), 3) * 0.75;
-        slots.material.emissiveIntensity = 1.05 + Math.pow(pop, 4) * 1.6;
+        slots.material.emissiveIntensity = 0.9 + Math.pow(pop, 4) * 0.7;
       });
+      hitC = { y: 0.6, r: 1.5 };
       body = this.physics.addStaticBox({ x: 0.75, y: 0.55, z: 0.62 }, { x, y: 0.55, z: zEnd + lz }, { userData: { type } });
     } else if (type === 'juicer') {
       // THE GREAT JUICER — spinning neon arms you must JUMP over
@@ -888,6 +892,7 @@ export class Environment {
         }
       });
       damage = 1; knock = 9; nmDist = 3.7;
+      hitC = { y: 0.9, r: 2.6 };
       body = bodies[0];
       extraBody = bodies[1];
     } else {
@@ -909,6 +914,7 @@ export class Environment {
         smoothie.rotation.y -= 4 * dt;
       });
       knock = 13; nmDist = 2.9;
+      hitC = { y: 2.0, r: 2.4 };
       body = this.physics.addStaticCylinder(2.0, 4.1, { x, y: 2.05, z: zEnd + lz }, { userData: { type } });
     }
 
@@ -917,10 +923,17 @@ export class Environment {
     body.userData.damage = damage;
     body.userData.knock = knock;
     body.userData.nmDist = nmDist;
+    body.userData.hitC = hitC || { y: 1.0, r: 1.8 };   // missile hit sphere
     body.userData.mesh = mesh;
     body.userData.chunk = chunk;
     body.userData.dead = false;
-    if (extraBody) extraBody.userData = body.userData; // juicer arm #2 shares fate
+    if (extraBody) {
+      // juicer arm #2: its own userData object + mutual buddy pointers so
+      // smashing EITHER arm removes both bodies (no invisible wall left)
+      extraBody.userData = { ...body.userData };
+      body.userData.buddy = extraBody;
+      extraBody.userData.buddy = body;
+    }
     const obstacle = { mesh, body, dead: false, launchT: 2 + rng() * 3 };
     chunk.obstacles.push(obstacle);
     chunk.allBodies.push(body);
@@ -1114,7 +1127,7 @@ export class Environment {
      RUNTIME
      ================================================================ */
 
-  /** Remove an obstacle (Super Yellow Mode smash). */
+  /** Remove an obstacle (Super Yellow Mode smash / banana missile). */
   smashObstacle(body) {
     if (!body.userData || body.userData.dead) return null;
     body.userData.dead = true;
@@ -1122,9 +1135,62 @@ export class Environment {
     const pos = mesh ? mesh.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3();
     if (mesh) mesh.visible = false;
     this.physics.removeBody(body);
-    const ob = (body.userData.chunk && body.userData.chunk.obstacles || []).find((o) => o.body === body);
+    // juicer arms share a fate: remove the twin body too
+    if (body.userData.buddy) this.physics.removeBody(body.userData.buddy);
+    const ob = (body.userData.chunk && body.userData.chunk.obstacles || []).find(
+      (o) => o.body === body || o.mesh === body.userData.mesh
+    );
     if (ob) ob.dead = true;
     return pos;
+  }
+
+  /** Sphere test for banana missiles: returns {body, x, y, z} of the first
+   *  live obstacle whose hit-sphere contains the point. */
+  missileHitTest(x, y, z) {
+    for (const chunk of this.chunks) {
+      const cz = chunk.group.position.z;
+      for (const ob of chunk.obstacles) {
+        if (ob.dead || !ob.body.userData) continue;
+        const wz = ob.mesh.position.z + cz;
+        const dz = z - wz;
+        if (dz > 3 || dz < -3) continue; // cheap prefilter
+        const c = ob.body.userData.hitC || { y: 1.0, r: 1.8 };
+        const dx = x - ob.mesh.position.x;
+        const dy = y - (ob.mesh.position.y + c.y);
+        if (dx * dx + dy * dy + dz * dz < c.r * c.r) {
+          return { body: ob.body, x: ob.mesh.position.x, y: ob.mesh.position.y + c.y, z: wz };
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Gentle auto-aim for the banana launcher: normalized direction toward
+   *  the most threatening obstacle ahead (or null = straight forward). */
+  aimAssist(px, py, pz) {
+    let best = null, bestScore = 1e9;
+    const my = py + 0.45;
+    for (const chunk of this.chunks) {
+      const cz = chunk.group.position.z;
+      for (const ob of chunk.obstacles) {
+        if (ob.dead) continue;
+        const wz = ob.mesh.position.z + cz;
+        const ahead = pz - wz;
+        if (ahead < 4 || ahead > 68) continue;
+        const dx = ob.mesh.position.x - px;
+        if (Math.abs(dx) > 5.5) continue;
+        const c = ob.body.userData.hitC || { y: 1.0, r: 1.8 };
+        const dy = (ob.mesh.position.y + c.y) - my;
+        const score = ahead + Math.abs(dx) * 1.5 + Math.abs(dy) * 2;
+        if (score < bestScore) {
+          bestScore = score;
+          best = { x: dx, y: dy, z: -ahead };
+        }
+      }
+    }
+    if (!best) return null;
+    const len = Math.hypot(best.x, best.y, best.z) || 1;
+    return { x: best.x / len, y: best.y / len, z: best.z / len };
   }
 
   /** A z position ahead of fromZ guaranteed to be solid road. */

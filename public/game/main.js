@@ -11,6 +11,7 @@ import { PhysicsWorld } from './PhysicsWorld.js';
 import { Player } from './Player.js';
 import { Environment } from './Environment.js';
 import { Particles } from './Particles.js';
+import { Missiles } from './Missiles.js';
 import { SoundManager } from './SoundManager.js';
 import { GameLogic, State } from './GameLogic.js';
 
@@ -79,7 +80,7 @@ class Game {
 
     // ---- cinematic 3-point lighting ----
     // key: warm sun
-    this.keyLight = new THREE.DirectionalLight(0xfff2cf, 2.3);
+    this.keyLight = new THREE.DirectionalLight(0xfff2cf, 2.05);
     this.keyLight.castShadow = true;
     this.keyLight.shadow.mapSize.set(1024, 1024);
     const sc = this.keyLight.shadow.camera;
@@ -100,10 +101,11 @@ class Game {
     const rt = new THREE.WebGLRenderTarget(w, h, { samples: 2, type: THREE.HalfFloatType });
     this.composer = new EffectComposer(this.renderer, rt);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    // Tamer glow: higher threshold so only true highlights bloom, lower
-    // strength + radius so the scene stays readable instead of drowning
-    // in neon haze.
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.42, 0.45, 0.85);
+    // Calm glow: high threshold (only true highlights bloom) + low strength +
+    // tight radius. Collecting stars / super mode used to stack bloom up to
+    // ~1.8 and wash the whole screen white — now the target is hard-clamped
+    // in _updateEffects as well, so it can NEVER blow out again.
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.32, 0.38, 0.92);
     this.composer.addPass(this.bloom);
     this.rgbPass = new ShaderPass(RGBShiftShader);
     this.rgbPass.uniforms.amount.value = 0.0006;
@@ -129,11 +131,13 @@ class Game {
     this.particles = new Particles(this.scene);
     this.player = new Player(this.physics, assets.cloneBanana(), assets.bananaBodyGeometry, this.scene);
     this.environment = new Environment(this.scene, this.physics, assets.bananaTemplate);
+    this.missiles = new Missiles(this.scene, assets.bananaTemplate);
     this.sound = new SoundManager();
     this.logic = new GameLogic({
       player: this.player,
       environment: this.environment,
       particles: this.particles,
+      missiles: this.missiles,
       sound: this.sound,
     });
     this.physics.onPlayerCollide((kind, body) => this.logic.handleCollision(kind, body));
@@ -169,7 +173,6 @@ class Game {
     jump: [' ', 'z', 'w', 'arrowup'],
     dive: ['s', 'arrowdown'],
   };
-
   static resolveAction(e) {
     const byCode = Game.KEY_ACTIONS;
     for (const action in byCode) {
@@ -189,46 +192,73 @@ class Game {
 
     // If the window/tab ever loses focus mid-press, the matching keyup never
     // fires and a steering key stays "stuck" (banana drifting on its own
-    // after resuming). Hard-reset every held input instead.
+    // after resuming). Hard-reset every held input instead — including the
+    // held-jump state that powers auto-bounce landings.
     const releaseAll = () => {
       player.input.left = false;
       player.input.right = false;
       player.input.down = false;
       player.input.boost = false;
+      player.input.jump = false;
     };
 
     window.addEventListener('keydown', (e) => {
       if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(e.code)) e.preventDefault();
       if (e.repeat) return;
+      const st = logic.state;
 
-      // meta keys (pause / mute / restart / turbo)
+      // ---- meta keys (pause / mute / restart / turbo / fire) ----
       switch (e.code) {
         case 'Enter':
-          if (logic.state === State.MENU) logic.start();
-          else if (logic.state === State.GAMEOVER && performance.now() - logic.goTime > 600) logic.restart();
+          if (st === State.MENU) logic.start();
+          else if (st === State.GAMEOVER && performance.now() - logic.goTime > 600) logic.restart();
+          else if (st === State.PAUSED) logic.togglePause();
           break;
         case 'KeyR':
-          if (logic.state === State.GAMEOVER) logic.restart();
+          if (st === State.GAMEOVER) logic.restart();
           break;
-        case 'ShiftLeft': case 'ShiftRight': player.input.boost = true; break;
+        case 'ShiftLeft': case 'ShiftRight':
+          if (st === State.PLAYING) player.input.boost = true;
+          break;
         case 'KeyP': case 'Escape':
-          if (logic.state === State.PLAYING || logic.state === State.PAUSED) logic.togglePause();
+          if (st === State.PLAYING || st === State.PAUSED) logic.togglePause();
           break;
         case 'KeyM': this._toggleMute(); break;
+        case 'KeyF': case 'KeyE':
+          if (st === State.PLAYING) logic.fireMissile();
+          break;
       }
 
-      // gameplay keys — QWERTY + AZERTY + arrows all resolve the same way
+      // ---- gameplay keys — QWERTY + AZERTY + arrows all resolve the same ----
       const action = Game.resolveAction(e);
       if (!action) return;
+
+      // ANY gameplay key un-pauses a run that was auto-paused by a focus
+      // loss: keys must NEVER feel dead. The key being held is registered
+      // right away so steering resumes instantly.
+      if (st === State.PAUSED) {
+        logic.togglePause();
+        if (action === 'left' || action === 'right') player.input[action] = true;
+        else if (action === 'dive') player.input.down = true;
+        if (action === 'jump') { player.input.jump = true; player.queueJump(); }
+        return;
+      }
+
       if (action === 'left' || action === 'right') {
-        if (logic.state === State.PLAYING) player.input[action] = true;
+        player.input[action] = st === State.PLAYING;
       } else if (action === 'dive') {
-        if (logic.state === State.PLAYING) player.input.down = true;
+        player.input.down = st === State.PLAYING;
       } else if (action === 'jump') {
-        if (logic.state === State.MENU) logic.start();
-        else if (logic.state === State.GAMEOVER) {
+        // track the HELD state — this is what makes space work ALL the time:
+        // holding it re-buffers the jump, so every landing bounces and a
+        // deliberate hold chains the HELI-PEEL double jump.
+        player.input.jump = true;
+        if (st === State.MENU) logic.start();
+        else if (st === State.GAMEOVER) {
           if (performance.now() - logic.goTime > 600) logic.restart();
-        } else if (logic.state === State.PLAYING) player.queueJump();
+        } else if (st === State.PLAYING) {
+          player.queueJump();
+        }
       }
     });
 
@@ -236,22 +266,45 @@ class Game {
       const action = Game.resolveAction(e);
       if (action === 'left' || action === 'right') player.input[action] = false;
       else if (action === 'dive') player.input.down = false;
+      else if (action === 'jump') player.input.jump = false;
       switch (e.code) {
         case 'ShiftLeft': case 'ShiftRight': player.input.boost = false; break;
       }
     });
 
-    // auto-pause when the tab loses focus (and never leave a key stuck)
+    // auto-pause when the tab loses focus (and never leave a key stuck).
+    // On refocus, reset inputs again defensively so the run resumes clean.
     window.addEventListener('blur', () => {
       releaseAll();
       if (logic.state === State.PLAYING) logic.togglePause();
     });
+    window.addEventListener('focus', releaseAll);
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
         releaseAll();
         if (logic.state === State.PLAYING) logic.togglePause();
       }
     });
+
+    // ---- clicking anywhere on the pause overlay resumes the run ----
+    // (previously only the RESUME button worked, so a blur-pause in the
+    // iframe could feel like the game had frozen with dead keys)
+    const pausedEl = document.getElementById('paused');
+    if (pausedEl) {
+      pausedEl.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('#btn-quit')) return;
+        if (logic.state === State.PAUSED) logic.togglePause();
+      });
+    }
+
+    // ---- banana missiles: click / tap the track to fire ----
+    this.renderer.domElement.addEventListener('pointerdown', () => {
+      window.focus(); // self-heal if the iframe ever lost focus
+      if (logic.state === State.PLAYING) logic.fireMissile();
+    });
+
+    // no context menu stealing focus mid-run
+    this.container.addEventListener('contextmenu', (e) => e.preventDefault());
 
     // ---- touch controls ----
     if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
@@ -268,21 +321,30 @@ class Game {
       bindHold('tc-left', () => { player.input.left = true; }, () => { player.input.left = false; });
       bindHold('tc-right', () => { player.input.right = true; }, () => { player.input.right = false; });
       bindHold('tc-boost', () => { player.input.boost = true; }, () => { player.input.boost = false; });
+      bindHold('tc-fire', () => { logic.fireMissile(); }, () => {});
       bindHold('tc-jump', () => {
+        player.input.jump = true;
         if (logic.state === State.PLAYING) player.queueJump();
-      }, () => {});
+      }, () => { player.input.jump = false; });
     }
   }
 
   _bindUI() {
-    document.getElementById('btn-start').addEventListener('click', () => this.logic && this.logic.start());
-    document.getElementById('btn-restart').addEventListener('click', () => this.logic && this.logic.restart());
-    document.getElementById('btn-resume').addEventListener('click', () => this.logic && this.logic.togglePause());
-    document.getElementById('btn-quit').addEventListener('click', () => this.logic && this.logic.quitToMenu());
-    document.getElementById('btn-pause').addEventListener('click', () => {
+    // Blur every button after its click: a focused button would otherwise
+    // swallow Space/Enter (re-triggering itself) and make the jump feel
+    // broken right after using the mouse.
+    const wire = (id, fn) => {
+      const el = document.getElementById(id);
+      el.addEventListener('click', () => { el.blur(); fn(); });
+    };
+    wire('btn-start', () => this.logic && this.logic.start());
+    wire('btn-restart', () => this.logic && this.logic.restart());
+    wire('btn-resume', () => this.logic && this.logic.togglePause());
+    wire('btn-quit', () => this.logic && this.logic.quitToMenu());
+    wire('btn-pause', () => {
       if (this.logic && (this.logic.state === State.PLAYING || this.logic.state === State.PAUSED)) this.logic.togglePause();
     });
-    document.getElementById('btn-mute').addEventListener('click', () => this._toggleMute());
+    wire('btn-mute', () => this._toggleMute());
   }
 
   _toggleMute() {
@@ -332,7 +394,7 @@ class Game {
         const f = document.getElementById('flash-overlay');
         if (f) { f.classList.remove('red'); void f.offsetWidth; f.classList.add('red'); }
       } else if (ev.type === 'zoneflash') {
-        this.bloomPulse = 0.7;
+        this.bloomPulse = 0.4;
         const f = document.getElementById('flash-overlay');
         if (f) { f.classList.remove('zone'); void f.offsetWidth; f.classList.add('zone'); }
       }
@@ -411,6 +473,14 @@ class Game {
         nearMissOK: state === State.PLAYING && !this.logic.superActive,
         difficulty: this.logic.difficulty,
         time: this.envTime,
+      });
+
+      // ---- banana missiles in flight ----
+      this.missiles.update(dt, {
+        playerZ: this.player.position.z,
+        particles: this.particles,
+        testHit: (x, y, z) => this.environment.missileHitTest(x, y, z),
+        onHit: (hit) => this.logic.onMissileHit(hit),
       });
 
       // ---- zone fog tint (seamless horizon) ----
@@ -519,9 +589,14 @@ class Game {
       this.camera.fov = this.fov;
       this.camera.updateProjectionMatrix();
     }
-    // bloom breathing (kept subtle: super mode should pop, not blind)
-    this.bloomPulse = Math.max(0, this.bloomPulse - dt * 1.4);
-    const bloomTarget = 0.45 + this.logic.boostFactor * 0.18 + this.player.superT * 0.5 + this.bloomPulse;
+    // bloom breathing (kept subtle: super mode should pop, not blind).
+    // Hard cap at 0.62: the old formula could stack boost + super + zone
+    // pulse up to ~1.8 and turn the screen pure white after a star streak.
+    this.bloomPulse = Math.max(0, this.bloomPulse - dt * 1.6);
+    const bloomTarget = Math.min(
+      0.62,
+      0.34 + this.logic.boostFactor * 0.10 + this.player.superT * 0.22 + this.bloomPulse * 0.8
+    );
     this.bloom.strength += (bloomTarget - this.bloom.strength) * Math.min(1, dt * 4);
     // chromatic aberration
     this.rgbPulse = Math.max(0, this.rgbPulse - dt * 0.006);

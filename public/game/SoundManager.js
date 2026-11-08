@@ -476,4 +476,64 @@ export class SoundManager {
     const g2 = this._env(t, 0.001, 0.09, 0.24);
     n.connect(f).connect(g2).connect(this.sfxGain);
   }
+
+  /* ================= v3 BANANA BALLISTICS SFX ================= */
+
+  /** Missile launch: rocket whoosh + rising whistle. */
+  sfxMissile() {
+    if (!this._sfxReady()) return;
+    const t = this.ctx.currentTime;
+    const n = this._noise(t, 0.45);
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'bandpass'; f.Q.value = 1.2;
+    f.frequency.setValueAtTime(500, t);
+    f.frequency.exponentialRampToValueAtTime(3200, t + 0.38);
+    const g = this._env(t, 0.012, 0.4, 0.3);
+    n.connect(f).connect(g).connect(this.sfxGain);
+    const o = this._osc('sine', 300, t);
+    o.frequency.exponentialRampToValueAtTime(950, t + 0.32);
+    const g2 = this._env(t, 0.01, 0.34, 0.14);
+    o.connect(g2).connect(this.sfxGain);
+    o.start(t); o.stop(t + 0.4);
+  }
+
+  /** Missile impact: deep comedic KABOOM. */
+  sfxExplosion() {
+    if (!this._sfxReady()) return;
+    const t = this.ctx.currentTime;
+    const o = this._osc('sine', 150, t);
+    o.frequency.exponentialRampToValueAtTime(32, t + 0.42);
+    const g = this._env(t, 0.004, 0.45, 0.6);
+    o.connect(g).connect(this.sfxGain);
+    o.start(t); o.stop(t + 0.5);
+    const n = this._noise(t, 0.34);
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.setValueAtTime(2200, t);
+    f.frequency.exponentialRampToValueAtTime(240, t + 0.32);
+    const g2 = this._env(t, 0.002, 0.34, 0.5);
+    n.connect(f).connect(g2).connect(this.sfxGain);
+    // splat overtone for the comedy
+    const o2 = this._osc('triangle', 420, t);
+    o2.frequency.exponentialRampToValueAtTime(90, t + 0.18);
+    const g3 = this._env(t, 0.002, 0.18, 0.2);
+    o2.connect(g3).connect(this.sfxGain);
+    o2.start(t); o2.stop(t + 0.22);
+  }
+
+  /** Empty launcher: dry click. */
+  sfxEmpty() {
+    if (!this._sfxReady()) return;
+    const t = this.ctx.currentTime;
+    const o = this._osc('square', 190, t);
+    o.frequency.exponentialRampToValueAtTime(120, t + 0.05);
+    const g = this._env(t, 0.001, 0.05, 0.14);
+    o.connect(g).connect(this.sfxGain);
+    o.start(t); o.stop(t + 0.07);
+    const n = this._noise(t, 0.04);
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'highpass'; f.frequency.value = 2500;
+    const g2 = this._env(t, 0.001, 0.035, 0.1);
+    n.connect(f).connect(g2).connect(this.sfxGain);
+  }
 }

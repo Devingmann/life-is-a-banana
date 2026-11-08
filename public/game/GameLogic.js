@@ -5,8 +5,9 @@
  * score & aggressive difficulty scaling, ZONES (palette + music shifts every
  * 400 m), peel-layer damage, potassium meter & Super Yellow Mode, Banana
  * Split Turbo, speed pads, near-miss GRAZE bonuses, golden bananas, toast
- * barrage hits, slip chaos, void falls, anti-stuck recovery, HUD updates,
- * arcade RANK grading and floating announcements.
+ * barrage hits, slip chaos, void falls, anti-stuck recovery, BANANA MISSILES
+ * (ammo economy + firing + smash scoring), HUD updates, arcade RANK grading
+ * and floating announcements.
  */
 
 const BEST_KEY = 'liab-best-v1';
@@ -14,6 +15,11 @@ const SUPER_DURATION = 6.2;
 const POTASSIUM_PER_STAR = 0.08;
 const BOOST_DRAIN = 1 / 2.2;   // full meter = 2.2s of boost
 const BOOST_REGEN = 1 / 5.0;
+
+const MISSILE_MAX = 6;         // HUD slots
+const MISSILE_START = 3;
+const MISSILE_CD = 0.3;        // seconds between shots
+const STARS_PER_MISSILE = 8;   // star streak → +1 ammo
 
 const ZONE_LEN = 400;
 const ZONES = [
@@ -32,6 +38,7 @@ export class GameLogic {
    * @param {{player:import('./Player.js').Player,
    *          environment:import('./Environment.js').Environment,
    *          particles:import('./Particles.js').Particles,
+   *          missiles:import('./Missiles.js').Missiles,
    *          sound:import('./SoundManager.js').SoundManager}} deps
    */
   constructor(deps) {
@@ -53,6 +60,7 @@ export class GameLogic {
       kFill: document.getElementById('k-fill'),
       boostFill: document.getElementById('boost-fill'),
       peelIcons: Array.from(document.querySelectorAll('#peel-icons .peel-icon')),
+      missileIcons: Array.from(document.querySelectorAll('#missile-icons .missile-icon')),
       menu: document.getElementById('menu'),
       menuBest: document.getElementById('menu-best'),
       gameover: document.getElementById('gameover'),
@@ -69,7 +77,7 @@ export class GameLogic {
       paused: document.getElementById('paused'),
       announce: document.getElementById('announce-layer'),
     };
-    this._lastHud = { score: -1, dist: -1, speed: -1, peel: -1, k: -1, boost: -1, mult: '', zone: -1 };
+    this._lastHud = { score: -1, dist: -1, speed: -1, peel: -1, k: -1, boost: -1, mult: '', zone: -1, msl: -1 };
   }
 
   _resetRun() {
@@ -97,6 +105,9 @@ export class GameLogic {
     this.smashed = 0;
     this.speedPadUntil = 0;
     this.toastCdUntil = 0;
+    this.missileAmmo = MISSILE_START;
+    this.missileCdUntil = 0;
+    this._starsSinceMissile = 0;
     this._wasBoosting = false;
     this.time = 0;
     this.goTime = 0;
@@ -115,6 +126,7 @@ export class GameLogic {
     this._resetRun();
     this.player.reset();
     this.environment.reset();
+    if (this.missiles) this.missiles.clear();
     this.sound.setIntensity('menu');
     this._dom.menu.classList.remove('hidden');
     this._dom.gameover.classList.add('hidden');
@@ -140,13 +152,14 @@ export class GameLogic {
     this._resetRun();
     this.player.reset();
     this.environment.reset();
+    if (this.missiles) this.missiles.clear();
     this.sound.setIntensity('playing');
     this.state = State.PLAYING;
     this._dom.menu.classList.add('hidden');
     this._dom.gameover.classList.add('hidden');
     this._dom.paused.classList.add('hidden');
     this._dom.hud.classList.remove('hidden');
-    this._lastHud = { score: -1, dist: -1, speed: -1, peel: -1, k: -1, boost: -1, mult: '', zone: -1 };
+    this._lastHud = { score: -1, dist: -1, speed: -1, peel: -1, k: -1, boost: -1, mult: '', zone: -1, msl: -1 };
   }
 
   togglePause() {
@@ -299,6 +312,12 @@ export class GameLogic {
     this.sound.sfxCollect(this.combo);
     this.particles.starSparkle(star.wx, star.wy, star.wz);
     if (this.combo > 2 && this.combo % 5 === 0) this.announce(`COMBO x${this.combo}`, 'small');
+    // star streaks reload the banana launcher
+    this._starsSinceMissile += 1;
+    if (this._starsSinceMissile >= STARS_PER_MISSILE) {
+      this._starsSinceMissile = 0;
+      this._grantMissile(1);
+    }
     if (this.potassium >= 1 && !this.superActive) this._triggerSuper();
   }
 
@@ -313,6 +332,7 @@ export class GameLogic {
     this.particles.goldenBurst(g.wx, g.wy, g.wz);
     this.announce('BANANE DORÉE ! +500', 'big');
     this.events.push({ type: 'slowmo', scale: 0.5, dur: 0.22 });
+    this._grantMissile(2);
     if (this.potassium >= 1 && !this.superActive) this._triggerSuper();
   }
 
@@ -338,6 +358,57 @@ export class GameLogic {
     this.sound.sfxToastHit();
     this.announce('TOASTÉ !', 'danger small');
     this.events.push({ type: 'shake', power: 0.3 });
+  }
+
+  /* ================= banana missiles ================= */
+
+  /** Fire a banana missile (F / E / click). Auto-aims at the nearest
+   *  obstacle ahead; ammo comes from star streaks + golden bananas. */
+  fireMissile() {
+    if (this.state !== State.PLAYING) return;
+    if (this.time < this.missileCdUntil) return;
+    if (this.missileAmmo <= 0) {
+      this.missileCdUntil = this.time + 0.35; // spam guard on the empty click
+      this.sound.sfxEmpty();
+      this.announce('PLUS DE MISSILES — RAMASSE DES ÉTOILES !', 'small danger');
+      return;
+    }
+    this.missileCdUntil = this.time + MISSILE_CD;
+    this.missileAmmo -= 1;
+    const p = this.player.position;
+    const aim = this.environment.aimAssist(p.x, p.y, p.z);
+    const speed = 46 + this.player.speed * 0.9;
+    this.missiles.fire(p.x, p.y + 0.45, p.z - 1.1, aim, speed);
+    this.sound.sfxMissile();
+    // muzzle flash (small on purpose — no whiteout)
+    this.particles.spawn(p.x, p.y + 0.45, p.z - 1.4, {
+      count: 7, spread: 0.3, dir: { x: 0, y: 0.25, z: -1 }, speed: 6, jitter: 3,
+      size: 7, life: 0.28, gravity: 0, drag: 2.2, colors: [0xff6ec7, 0xffd24a, 0xffffff],
+    });
+  }
+
+  /** Missile reached an obstacle: KABOOM + smash scoring. */
+  onMissileHit(hit) {
+    const pos = this.environment.smashObstacle(hit.body);
+    if (!pos) return;
+    this.particles.smashBurst(pos.x, pos.y, pos.z);
+    this.sound.sfxExplosion();
+    this.events.push({ type: 'shake', power: 0.5 });
+    if (this.state !== State.PLAYING) return;
+    this.smashed += 1;
+    this.combo += 1;
+    this.comboTimer = 3.5;
+    const pts = 80 + Math.min(140, this.combo * 6);
+    this.scoreF += pts;
+    this.announce(`KABOOM ! +${pts}`, 'small teal');
+    this.events.push({ type: 'slowmo', scale: 0.62, dur: 0.1 });
+  }
+
+  _grantMissile(n) {
+    if (this.missileAmmo >= MISSILE_MAX) return;
+    this.missileAmmo = Math.min(MISSILE_MAX, this.missileAmmo + n);
+    this.announce('MISSILE BANANE PRÊT !', 'small');
+    this.sound.sfxZone();
   }
 
   _triggerSuper() {
@@ -473,6 +544,10 @@ export class GameLogic {
     if (this.peel !== h.peel) {
       d.peelIcons.forEach((icon, i) => icon.classList.toggle('lost', i >= this.peel));
       h.peel = this.peel;
+    }
+    if (this.missileAmmo !== h.msl && d.missileIcons.length) {
+      d.missileIcons.forEach((icon, i) => icon.classList.toggle('empty', i >= this.missileAmmo));
+      h.msl = this.missileAmmo;
     }
     const k = Math.round(this.potassium * 100);
     if (k !== h.k) {

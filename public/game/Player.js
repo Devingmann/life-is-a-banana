@@ -6,10 +6,11 @@ const ROAD_HALF = 5.9;      // playable half-width (neon rails beyond)
 const RADIUS = 0.85;        // physics sphere radius
 const JUMP_VELOCITY = 13.8;
 const DOUBLE_JUMP_VELOCITY = 10.6; // HELI-PEEL: mid-air spin jump
-const LATERAL_BASE = 11.5;
-const LATERAL_PER_DIFF = 8.0;      // steering authority scales with speed
+const LATERAL_BASE = 13.0;
+const LATERAL_PER_DIFF = 9.0;      // steering authority scales with speed
 const COYOTE_TIME = 0.12;
 const JUMP_BUFFER = 0.14;
+const HOLD_JUMP_DELAY = 0.3;       // held space chains the double jump after this
 
 /**
  * Player — the Cosmic Banana
@@ -82,11 +83,12 @@ export class Player {
     physics.registerPlayer(this.body);
 
     // ---- input & state ----
-    this.input = { left: false, right: false, boost: false, down: false };
+    this.input = { left: false, right: false, boost: false, down: false, jump: false };
     this.jumpBuffered = 0;
     this.jumpsUsed = 0;       // 0 = grounded, 1 = ground-jump spent, 2 = double spent
     this.prevCoyote = false;
     this.lastGroundedAt = -999;
+    this.lastJumpAt = -999;   // timestamps the last executed jump (hold-chaining)
     this.prevGrounded = false;
     this.prevVy = 0;
     this.invulnUntil = 0;
@@ -174,11 +176,24 @@ export class Player {
 
     // ---------- jump (buffered + coyote) & HELI-PEEL double jump ----------
     this.jumpBuffered = Math.max(0, this.jumpBuffered - dt);
+
+    // HELD jump key = persistent intent. Space must work ALL the time:
+    // while the key stays down the buffer keeps refreshing, so the banana
+    // bounces on EVERY landing, and a deliberate hold (> HOLD_JUMP_DELAY)
+    // chains the HELI-PEEL. Quick taps are untouched.
+    if (ctx.active && this.input.jump) {
+      const sinceJump = this.time - this.lastJumpAt;
+      if (this.jumpsUsed === 0 || sinceJump > HOLD_JUMP_DELAY) {
+        this.jumpBuffered = Math.max(this.jumpBuffered, JUMP_BUFFER);
+      }
+    }
+
     if (this.jumpBuffered > 0) {
       if (coyote && v.y < 2.5) {
         v.y = JUMP_VELOCITY;
         this.jumpBuffered = 0;
         this.jumpsUsed = 1;
+        this.lastJumpAt = this.time;
         this.lastGroundedAt = -999; // consume
         this.squashVel = 6.5;       // stretch pop
         if (ctx.onJump) ctx.onJump();
@@ -186,6 +201,7 @@ export class Player {
         // HELI-PEEL: mid-air spin jump — the skill ceiling for gap crossings
         this.jumpBuffered = 0;
         this.jumpsUsed = 2;
+        this.lastJumpAt = this.time;
         v.y = Math.max(v.y, DOUBLE_JUMP_VELOCITY);
         this.spinT = 0.55;
         this.squashVel = 4.5;
@@ -224,7 +240,7 @@ export class Player {
     }
     const slipping = this.slipUntil > this.time;
     const lateral = LATERAL_BASE + LATERAL_PER_DIFF * Math.min(1, ctx.difficulty || 0);
-    let targetX = steer * lateral * (coyote ? 1 : 0.72);
+    let targetX = steer * lateral * (coyote ? 1 : 0.8);
     if (slipping && ctx.active) {
       // chaotic banana-peel drift: wobble + jitter impulses (tuned down —
       // the old value could hurl the banana into the neon rails)
@@ -232,7 +248,9 @@ export class Player {
       targetX += Math.sin(this.time * 11.3) * 7.5;
       v.x += (Math.random() - 0.5) * 22 * dt;
     }
-    if (!stunned) v.x += (targetX - v.x) * Math.min(1, (coyote ? 9 : 4.5) * dt);
+    // snappier convergence than before (14/s grounded, 7/s airborne) so
+    // steering never feels laggy at high speed
+    if (!stunned) v.x += (targetX - v.x) * Math.min(1, (coyote ? 14 : 7) * dt);
 
     // ---------- road rails (soft clamp) ----------
     const p = this.body.position;
@@ -288,20 +306,22 @@ export class Player {
     this.modelGroup.scale.set(1 / Math.sqrt(sq), sq, 1 / Math.sqrt(sq));
 
     // ---------- super yellow glow ----------
+    // (tuned down from 1.8 → 1.05 max emissive: the old values + bloom
+    // washed the screen white during star streaks)
     this.superT += ((ctx.superMode ? 1 : 0) - this.superT) * Math.min(1, dt * 4);
     const pulse = 0.5 + 0.5 * Math.sin(this.time * 11);
     for (const m of this.materials) {
       if (!m.emissive) continue;
       if (this.superT > 0.01) {
-        m.emissive.setRGB(0.85 * this.superT + 0.05 * pulse * this.superT, 0.62 * this.superT, 0.1 * this.superT);
-        m.emissiveIntensity = 0.9 + 0.9 * this.superT;
+        m.emissive.setRGB(0.72 * this.superT + 0.04 * pulse * this.superT, 0.52 * this.superT, 0.09 * this.superT);
+        m.emissiveIntensity = 0.55 + 0.5 * this.superT;
       } else {
         m.emissive.setHex(0x3a2a05);
         m.emissiveIntensity = 0.35;
       }
     }
     if (this.superT > 0.01) {
-      const s = 1 + 0.07 * this.superT * pulse;
+      const s = 1 + 0.05 * this.superT * pulse;
       this.root.scale.setScalar(s);
     } else {
       this.root.scale.setScalar(1);
@@ -343,11 +363,12 @@ export class Player {
   /** Full reset (new run). */
   reset() {
     this.respawn(0, 1.6, 0);
-    this.input.left = this.input.right = this.input.boost = this.input.down = false;
+    this.input.left = this.input.right = this.input.boost = this.input.down = this.input.jump = false;
     this.jumpBuffered = 0;
     this.jumpsUsed = 0;
     this.prevCoyote = false;
     this.lastGroundedAt = -999;
+    this.lastJumpAt = -999;
     this.invulnUntil = 0;
     this.slipUntil = 0;
     this.superT = 0;

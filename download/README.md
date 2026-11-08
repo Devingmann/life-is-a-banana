@@ -6,19 +6,59 @@ Jeu de runner physique en Three.js + cannon-es (100% hors-ligne, sans build).
 
 - `LifeIsABanana_standalone.zip` — le jeu complet, prêt à jouer :
   dézippez puis ouvrez `game/index.html` dans un navigateur (Chrome / Edge / Firefox).
-  (**v2 COSMIC+ du 2026-11-08** — banane déblocable, double saut, zones, difficulté pro.)
+  (**v3 BANANA BALLISTICS du 2026-11-09** — missiles banane, glow maîtrisé,
+  clavier infaillible.)
 
 ## Commandes
 
 | Action | Touches |
 | --- | --- |
 | Diriger | **ZQSD** (AZERTY) · **WASD** (QWERTY) · **Flèches ← →** |
-| Sauter | **Espace** · **↑** · **Z/W** |
+| Sauter | **Espace** · **↑** · **Z/W** (maintenu = rebond à chaque atterrissage) |
 | **Double saut Heli-Peel** | **Espace ×2** (en l'air) |
 | Plongeon-stomp (boost de vitesse) | **↓** · **S** |
 | Turbo Banana Split | **Shift** |
-| Pause / Muet | **P** / **M** |
+| **Missile banane** | **F** · **E** · **Clic** (8 étoiles = +1 munition, dorée = +2) |
+| Pause / Muet | **P** / **M** (n'importe quelle touche de jeu reprend la pause) |
 | Rejouer (après game over) | **Espace** · **Entrée** · **R** |
+
+## v3 BANANA BALLISTICS — correctifs & nouveautés
+
+### 1. « Ça devient tout blanc quand je prends trop d'étoiles » — RÉSOLU
+La formule du bloom pouvait empiler turbo + Super Yellow + flash de zone
+jusqu'à ~1,8 de puissance : saturation blanche garantie. Triple correctif :
+- bloom de base réduit (strength 0,32, seuil 0,92) et **plafonné
+  irrémédiablement à 0,62** — même dans le pire cas empilé ;
+- émissifs de la banane (Super Mode), étoiles, bananes dorées, arches,
+  grille-pain et soleil tous réduits ; particules additives (sparkles,
+  traînée dorée, explosions) plus petites et plus courtes ;
+- vérifié au pixel près : le pire cas affiche 107/255 de luminosité moyenne
+  (contre un écran uniformément blanc avant).
+
+### 2. « Espace ne marche plus / les touches s'arrêtent » — RÉSOLU
+- **Espace maintenu = intention de saut permanente** : la banane rebondit à
+  chaque atterrissage et enchaîne le double saut Heli-Peel après 0,3 s de
+  maintien. Un appui bref reste un simple saut.
+- La pause auto (perte de focus de l'iframe) se **reprend avec n'importe
+  quelle touche de jeu ou un clic n'importe où sur l'écran** — plus jamais
+  de « touches mortes ».
+- Les boutons (pause / muet / start) **rendent le focus après clic** : ils ne
+  « volent » plus la barre d'espace.
+- Direction plus réactive : convergence latérale 9→14/s au sol, 4,5→7/s en
+  l'air ; reset défensif des touches à chaque regain de focus.
+
+### 3. MISSILES DE BANANE (nouveau)
+- **F, E ou clic** lance une banane fusée qui file devant (46 + vitesse), avec
+  auto-visée douce sur l'obstacle le plus menaçant, traînée d'étincelles et
+  rotation propre.
+- À l'impact : **KABOOM** — l'obstacle explose (singes, gorilles,
+  grille-pain, mixeurs, centrifugeuses), +80 pts et plus avec le combo, shake,
+  micro-ralenti et son de détonation procédural.
+- **Munitions** : 3 au départ, +1 toutes les 8 étoiles, +2 par banane dorée,
+  6 max — HUD dédié dans le panneau droit. Bouton FEU tactile sur mobile.
+- Bonus caché : le 2ᵉ bras de la centrifugeuse (corps « fantôme » invisible
+  après destruction) est désormais retiré proprement aussi bien en Super
+  Mode qu'au missile.
 
 ## v2 COSMIC+ — correctifs & nouveautés
 
