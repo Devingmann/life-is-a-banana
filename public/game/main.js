@@ -60,37 +60,32 @@ const RetroGlitchShader = {
     void main() {
       vec2 uv = vUv;
 
-      // --- VHS tracking: whole rows of the frame slip sideways ---
-      float rowNoise = hash(vec2(floor(uv.y * 28.0), floor(uTime * 20.0)));
-      float slipGate = smoothstep(0.93 - uGlitch * 0.5, 1.0, rowNoise);
-      uv.x += slipGate * (hash(vec2(floor(uTime * 13.0), floor(uv.y * 28.0))) - 0.5)
-              * (0.02 + uGlitch * 0.11);
+      // VHS tracking très subtil + varié
+      float rowNoise = hash(vec2(floor(uv.y * 42.0), floor(uTime * 14.0)));
+      float slipGate = smoothstep(0.97 - uGlitch * 0.35, 1.0, rowNoise);
+      uv.x += slipGate * (hash(vec2(floor(uTime * 9.0), floor(uv.y * 42.0))) - 0.5)
+              * (0.008 + uGlitch * 0.045);
 
-      // --- constant sub-pixel CRT jitter ---
-      uv.x += sin(uv.y * 160.0 + uTime * 2.4) * (0.0004 + uGlitch * 0.0012);
+      // jitter CRT ultra fin
+      uv.x += sin(uv.y * 210.0 + uTime * 1.8) * (0.00018 + uGlitch * 0.0007);
 
-      // --- chromatic split: colour separation, NOT brightness ---
-      float ca = 0.0012 + uGlitch * 0.0075;
+      // chromatic aberration douce
+      float ca = 0.0006 + uGlitch * 0.0038;
       vec3 col;
       col.r = texture2D(tDiffuse, uv + vec2(ca, 0.0)).r;
       col.g = texture2D(tDiffuse, uv).g;
       col.b = texture2D(tDiffuse, uv - vec2(ca, 0.0)).b;
 
-      // torn rows smear their RGB channels wide apart
-      float smear = slipGate * (0.004 + uGlitch * 0.02);
-      col.r = mix(col.r, texture2D(tDiffuse, uv + vec2(smear, 0.0)).r, slipGate);
-      col.b = mix(col.b, texture2D(tDiffuse, uv - vec2(smear, 0.0)).b, slipGate);
+      // scanlines très légères
+      col *= 1.0 - 0.022 * (0.5 + 0.5 * sin(uv.y * 780.0));
 
-      // --- dark CRT scanlines (subtractive) ---
-      col *= 1.0 - 0.042 * (0.5 + 0.5 * sin(uv.y * 640.0));
-
-      // --- slow rolling VHS band (a dark sweep down the screen) ---
-      float roll = fract(uTime * 0.09);
+      // bande VHS lente et discrète
+      float roll = fract(uTime * 0.06);
       float rollDist = abs(fract(uv.y - roll) - 0.5);
-      col *= 1.0 - 0.05 * smoothstep(0.5, 0.0, rollDist);
+      col *= 1.0 - 0.028 * smoothstep(0.48, 0.0, rollDist);
 
-      // --- subtractive grain (signal noise, never light) ---
-      col -= hash(uv + fract(uTime) * 61.7) * (0.03 + uGlitch * 0.05);
+      // grain très fin et varié
+      col -= hash(uv + fract(uTime * 1.3) * 47.0) * (0.012 + uGlitch * 0.028);
 
       gl_FragColor = vec4(col, 1.0);
     }
@@ -680,7 +675,7 @@ class Game {
     this.glitchAmp *= Math.exp(-2.6 * dt);
     const u = this.glitchPass.uniforms;
     u.uTime.value = this.envTime;
-    u.uGlitch.value = 0.055 + this.logic.boostFactor * 0.1 + this.glitchAmp;
+    u.uGlitch.value = 0.015 + this.logic.boostFactor * 0.06 + this.glitchAmp;
   }
 }
 

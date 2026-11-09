@@ -42,21 +42,42 @@ const _FRAG = /* glsl */ `
 `;
 
 function makeSpriteTexture() {
-  // RETRO GLITCH chip: a hard-edged square pixel with a dark rim. The rim
-  // multiplies the particle colour (see _FRAG) so every chip reads as a
-  // matte 8-bit confetti bit — outline and all — never as a glowing orb.
   const c = document.createElement('canvas');
   c.width = c.height = 64;
   const ctx = c.getContext('2d');
   ctx.clearRect(0, 0, 64, 64);
-  ctx.fillStyle = 'rgba(10,4,26,0.92)';
-  ctx.fillRect(6, 6, 52, 52);      // dark rim / outline
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(12, 12, 40, 40);    // white core (tinted per particle)
-  // cut the corners: chunky 8-bit silhouette
-  ctx.fillStyle = 'rgba(10,4,26,0.92)';
-  ctx.fillRect(6, 6, 5, 5); ctx.fillRect(53, 6, 5, 5);
-  ctx.fillRect(6, 53, 5, 5); ctx.fillRect(53, 53, 5, 5);
+
+  // plusieurs formes subtiles au lieu d’un gros cube
+  const shapes = [
+    () => { // petit pixel net
+      ctx.fillStyle = 'rgba(8,3,20,0.85)';
+      ctx.fillRect(18, 18, 28, 28);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(22, 22, 20, 20);
+    },
+    () => { // losange soft
+      ctx.fillStyle = 'rgba(8,3,20,0.8)';
+      ctx.beginPath();
+      ctx.moveTo(32, 12); ctx.lineTo(50, 32); ctx.lineTo(32, 52); ctx.lineTo(14, 32);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.moveTo(32, 18); ctx.lineTo(44, 32); ctx.lineTo(32, 46); ctx.lineTo(20, 32);
+      ctx.closePath(); ctx.fill();
+    },
+    () => { // croix fine
+      ctx.fillStyle = 'rgba(8,3,20,0.85)';
+      ctx.fillRect(26, 14, 12, 36);
+      ctx.fillRect(14, 26, 36, 12);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(28, 16, 8, 32);
+      ctx.fillRect(16, 28, 32, 8);
+    }
+  ];
+
+  // on dessine une forme au hasard à chaque création de texture
+  shapes[Math.floor(Math.random() * shapes.length)]();
+
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.magFilter = THREE.NearestFilter;
