@@ -536,4 +536,60 @@ export class SoundManager {
     const g2 = this._env(t, 0.001, 0.035, 0.1);
     n.connect(f).connect(g2).connect(this.sfxGain);
   }
+
+  /* ================= v4 BOSS & MEGA BONUS SFX ================= */
+
+  /** Boss spawned: descending menace + timpani slam. */
+  sfxBoss(mega) {
+    if (!this._sfxReady()) return;
+    const t = this.ctx.currentTime;
+    const notes = mega ? [57, 53, 50, 45] : [62, 58, 55];
+    notes.forEach((note, i) => {
+      const tt = t + i * 0.16;
+      const o = this._osc('sawtooth', midi(note), tt);
+      const f = this.ctx.createBiquadFilter();
+      f.type = 'lowpass'; f.frequency.value = 620;
+      const g = this._env(tt, 0.01, 0.3, 0.28);
+      o.connect(f).connect(g).connect(this.sfxGain);
+      o.start(tt); o.stop(tt + 0.36);
+    });
+    const n = this._noise(t + 0.45, 0.4);
+    const f2 = this.ctx.createBiquadFilter();
+    f2.type = 'lowpass';
+    f2.frequency.setValueAtTime(900, t + 0.45);
+    f2.frequency.exponentialRampToValueAtTime(120, t + 0.8);
+    const g2 = this._env(t + 0.45, 0.005, 0.4, 0.45);
+    n.connect(f2).connect(g2).connect(this.sfxGain);
+  }
+
+  /** MEGA BONUS fanfare (boss kill): rising arcade fanfare + sparkle sweep. */
+  sfxMegaBonus() {
+    if (!this._sfxReady()) return;
+    const t = this.ctx.currentTime;
+    [64, 67, 71, 74, 79, 84].forEach((note, i) => {
+      const tt = t + i * 0.07;
+      const o = this._osc('square', midi(note), tt);
+      const g = this._env(tt, 0.004, 0.32, 0.15);
+      o.connect(g).connect(this.sfxGain);
+      o.start(tt); o.stop(tt + 0.38);
+    });
+    const n = this._noise(t + 0.42, 0.7);
+    const f2 = this.ctx.createBiquadFilter();
+    f2.type = 'highpass';
+    f2.frequency.setValueAtTime(2000, t + 0.42);
+    f2.frequency.exponentialRampToValueAtTime(8000, t + 1.0);
+    const g2 = this._env(t + 0.42, 0.05, 0.7, 0.11);
+    n.connect(f2).connect(g2).connect(this.sfxGain);
+  }
+
+  /** PEEL PATCH pickup: soft cartoon bandage snap. */
+  sfxPatch() {
+    if (!this._sfxReady()) return;
+    const t = this.ctx.currentTime;
+    const o = this._osc('triangle', 520, t);
+    o.frequency.exponentialRampToValueAtTime(980, t + 0.09);
+    const g = this._env(t, 0.002, 0.12, 0.2);
+    o.connect(g).connect(this.sfxGain);
+    o.start(t); o.stop(t + 0.16);
+  }
 }

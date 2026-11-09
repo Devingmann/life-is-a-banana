@@ -4,7 +4,6 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { RGBShiftShader } from 'three/addons/shaders/RGBShiftShader.js';
 
 import { AssetManager } from './AssetManager.js';
 import { PhysicsWorld } from './PhysicsWorld.js';
@@ -12,17 +11,91 @@ import { Player } from './Player.js';
 import { Environment } from './Environment.js';
 import { Particles } from './Particles.js';
 import { Missiles } from './Missiles.js';
+import { Bosses } from './Bosses.js';
 import { SoundManager } from './SoundManager.js';
 import { GameLogic, State } from './GameLogic.js';
 
 /**
  * main.js — bootstraps the Cosmic Slip: renderer, cinematic lighting,
- * post-processing stack (bloom + chromatic aberration), the fixed-timestep
+ * post-processing stack (bloom + RETRO GLITCH pass), the fixed-timestep
  * game loop with slow-mo juice, camera choreography, input bindings
  * (keyboard + touch), resize handling and UI wiring.
  */
 
 const FOG_COLOR = 0x160a2e;
+
+/* ====================================================================
+ * RETRO GLITCH — BANANA STYLE
+ * A full-screen corruption pass: VHS tracking rows that slip sideways,
+ * a constant sub-pixel CRT wobble, chromatic (RGB) separation, DARK
+ * scanlines, a slow rolling VHS band and subtractive grain. It is pure
+ * corruption — everything it does darkens or displaces — so it can
+ * never brighten the screen. Big gameplay events (boss spawn, hits,
+ * MEGA BONUS, damage) pulse uGlitch up to 1 for a proper signal-torn
+ * freak-out, then it decays back to the ambient CRT jitter.
+ * ==================================================================== */
+const RetroGlitchShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uTime: { value: 0 },
+    uGlitch: { value: 0 },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float uTime;
+    uniform float uGlitch;
+    varying vec2 vUv;
+
+    float hash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+    }
+
+    void main() {
+      vec2 uv = vUv;
+
+      // --- VHS tracking: whole rows of the frame slip sideways ---
+      float rowNoise = hash(vec2(floor(uv.y * 28.0), floor(uTime * 20.0)));
+      float slipGate = smoothstep(0.93 - uGlitch * 0.5, 1.0, rowNoise);
+      uv.x += slipGate * (hash(vec2(floor(uTime * 13.0), floor(uv.y * 28.0))) - 0.5)
+              * (0.02 + uGlitch * 0.11);
+
+      // --- constant sub-pixel CRT jitter ---
+      uv.x += sin(uv.y * 160.0 + uTime * 2.4) * (0.0004 + uGlitch * 0.0012);
+
+      // --- chromatic split: colour separation, NOT brightness ---
+      float ca = 0.0012 + uGlitch * 0.0075;
+      vec3 col;
+      col.r = texture2D(tDiffuse, uv + vec2(ca, 0.0)).r;
+      col.g = texture2D(tDiffuse, uv).g;
+      col.b = texture2D(tDiffuse, uv - vec2(ca, 0.0)).b;
+
+      // torn rows smear their RGB channels wide apart
+      float smear = slipGate * (0.004 + uGlitch * 0.02);
+      col.r = mix(col.r, texture2D(tDiffuse, uv + vec2(smear, 0.0)).r, slipGate);
+      col.b = mix(col.b, texture2D(tDiffuse, uv - vec2(smear, 0.0)).b, slipGate);
+
+      // --- dark CRT scanlines (subtractive) ---
+      col *= 1.0 - 0.042 * (0.5 + 0.5 * sin(uv.y * 640.0));
+
+      // --- slow rolling VHS band (a dark sweep down the screen) ---
+      float roll = fract(uTime * 0.09);
+      float rollDist = abs(fract(uv.y - roll) - 0.5);
+      col *= 1.0 - 0.05 * smoothstep(0.5, 0.0, rollDist);
+
+      // --- subtractive grain (signal noise, never light) ---
+      col -= hash(uv + fract(uTime) * 61.7) * (0.03 + uGlitch * 0.05);
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `,
+};
 
 class Game {
   constructor() {
@@ -31,7 +104,7 @@ class Game {
     this.slowTimer = 0;
     this.slowScale = 1;
     this.shakeAmp = 0;
-    this.rgbPulse = 0;
+    this.glitchAmp = 0;   // RETRO GLITCH event pulse (decays on its own)
     this.envTime = 0;
     this.fov = 72;
     this.camRoll = 0;
@@ -100,18 +173,18 @@ class Game {
     const rt = new THREE.WebGLRenderTarget(w, h, { samples: 2, type: THREE.HalfFloatType });
     this.composer = new EffectComposer(this.renderer, rt);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    // GLOW POLICY — the bloom is a CONSTANT: low strength, high threshold,
-    // tight radius. Only the genuine neon of the scenery (the additive
-    // synthwave sun and the brightest sky) ever crosses the threshold.
-    // Collectibles, missiles, the banana and every speed / turbo / super
-    // feedback stay deliberately far below it, and the strength NEVER
-    // reacts to gameplay — so the screen can not white out, ever.
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.3, 0.35, 0.9);
+    // GLOW POLICY — the bloom exists for ONE thing: the neon strips on the
+    // EDGES OF THE ROAD (emissiveIntensity 3, always over threshold).
+    // Collectibles, missiles, particles, bosses, the banana and every
+    // speed / turbo / super feedback stay flat matte paint, below the
+    // threshold, so ZERO light leaves them. The strength is a constant and
+    // never reacts to gameplay — the screen cannot white out, ever.
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.6, 0.55, 0.95);
     this.composer.addPass(this.bloom);
-    this.rgbPass = new ShaderPass(RGBShiftShader);
-    this.rgbPass.uniforms.amount.value = 0.0006;
-    this.rgbPass.uniforms.angle.value = 0.6;
-    this.composer.addPass(this.rgbPass);
+    // RETRO GLITCH pass: VHS tracking slips, chromatic split, dark CRT
+    // scanlines and subtractive grain. Pure corruption, zero brightness.
+    this.glitchPass = new ShaderPass(RetroGlitchShader);
+    this.composer.addPass(this.glitchPass);
     this.composer.addPass(new OutputPass());
   }
 
@@ -133,12 +206,14 @@ class Game {
     this.player = new Player(this.physics, assets.cloneBanana(), assets.bananaBodyGeometry, this.scene);
     this.environment = new Environment(this.scene, this.physics, assets.bananaTemplate);
     this.missiles = new Missiles(this.scene, assets.bananaTemplate);
+    this.bosses = new Bosses(this.scene);
     this.sound = new SoundManager();
     this.logic = new GameLogic({
       player: this.player,
       environment: this.environment,
       particles: this.particles,
       missiles: this.missiles,
+      bosses: this.bosses,
       sound: this.sound,
     });
     this.physics.onPlayerCollide((kind, body) => this.logic.handleCollision(kind, body));
@@ -375,12 +450,12 @@ class Game {
     const rawDt = Math.min((now - this._lastT) / 1000, 0.05);
     this._lastT = now;
 
-    // ---- consume juice events (shake / slow-mo) ----
+    // ---- consume juice events (shake / slow-mo / glitch) ----
     for (const ev of this.logic.events) {
       if (ev.type === 'shake') {
         this.shakeAmp = Math.min(1.5, this.shakeAmp + ev.power);
         if (ev.power >= 0.7) {
-          this.rgbPulse = 0.005;
+          this.glitchAmp = Math.min(1.1, this.glitchAmp + 0.45);
           const c = this.container;
           c.classList.remove('shake');
           void c.offsetWidth;
@@ -390,6 +465,8 @@ class Game {
         this.slowScale = ev.scale;
         this.slowTimer = ev.dur;
         this.timeScale = ev.scale;
+      } else if (ev.type === 'glitch') {
+        this.glitchAmp = Math.min(1.2, this.glitchAmp + ev.power);
       } else if (ev.type === 'redflash') {
         const f = document.getElementById('flash-overlay');
         if (f) { f.classList.remove('red'); void f.offsetWidth; f.classList.add('red'); }
@@ -425,15 +502,17 @@ class Game {
         active: state === State.PLAYING,
         onJump: () => {
           this.sound.sfxJump();
+          // matte banana-dust chips — ZERO light
           this.particles.spawn(this.player.position.x, this.player.position.y - 0.7, this.player.position.z, {
-            count: 8, speed: 2.5, size: 9, life: 0.45, gravity: 1, upBias: 0.5, colors: [0xd8c9ff, 0xffffff],
+            count: 8, speed: 2.5, size: 9, life: 0.45, gravity: 1, upBias: 0.5, colors: [0xe3be1a, 0xc9a80f],
           });
         },
         onDoubleJump: () => {
           this.sound.sfxDoubleJump();
+          // HELI-PEEL: chunky retro confetti, ZERO light — no additive cloud
           this.particles.spawn(this.player.position.x, this.player.position.y - 0.55, this.player.position.z, {
             count: 16, speed: 5.5, size: 10, life: 0.42, gravity: -1, upBias: 0.4,
-            colors: [0xd8c9ff, 0x00ffa3, 0xffffff],
+            colors: [0xffe135, 0xff2e92, 0x9b5de5],
           });
         },
         // jump pressed with an empty endurance meter: dry-click feedback +
@@ -453,12 +532,12 @@ class Game {
           this.sound.sfxUnstuck();
           this.particles.spawn(this.player.position.x, this.player.position.y, this.player.position.z, {
             count: 22, speed: 8, size: 13, life: 0.55, gravity: 2, upBias: 0.7,
-            colors: [0x9b5de5, 0xd8c9ff, 0xff6ec7],
+            colors: [0x9b5de5, 0x39d0ff, 0xff6ec7],
           });
         },
         onLand: () => {
           this.particles.spawn(this.player.position.x, 0.15, this.player.position.z, {
-            count: 12, speed: 4, size: 11, life: 0.5, gravity: 3, upBias: 0.35, colors: [0xd8c9ff, 0xff6ec7, 0xffffff],
+            count: 12, speed: 4, size: 11, life: 0.5, gravity: 3, upBias: 0.35, colors: [0x8f7bff, 0xff6ec7, 0xffe135],
           });
           this.shakeAmp = Math.min(1.5, this.shakeAmp + 0.12);
         },
@@ -472,6 +551,7 @@ class Game {
         superMode: this.logic.superActive,
         onStar: (star) => this.logic.onStar(star),
         onGolden: (g) => this.logic.onGolden(g),
+        onPatch: (p) => this.logic.onPatch(p),
         onToastHit: () => this.logic.onToastHit(),
         onNearMiss: (x, y, z) => {
           this.logic.onNearMiss();
@@ -482,12 +562,12 @@ class Game {
         time: this.envTime,
       });
 
-      // ---- banana missiles in flight ----
+      // ---- banana missiles in flight (bosses take priority over props) ----
       this.missiles.update(dt, {
         playerZ: this.player.position.z,
         particles: this.particles,
-        testHit: (x, y, z) => this.environment.missileHitTest(x, y, z),
-        onHit: (hit) => this.logic.onMissileHit(hit),
+        testHit: (x, y, z) => (this.bosses.testHit(x, y, z) || this.environment.missileHitTest(x, y, z)),
+        onHit: (hit) => (hit.boss ? this.logic.onBossMissileHit(hit) : this.logic.onMissileHit(hit)),
       });
 
       // ---- zone fog tint (seamless horizon) ----
@@ -581,7 +661,7 @@ class Game {
 
   _updateEffects(dt) {
     // FOV kick during boost / super / speed pads — widens with raw speed too.
-    // Speed FEEL comes from the lens and the world, never from glow.
+    // Speed FEEL comes from the lens and the world, never from brightness.
     const pad = this.logic.padActive ? 1 : 0;
     const fovTarget = 72
       + Math.max(0, this.player.speed - 24) * 0.14
@@ -593,14 +673,14 @@ class Game {
       this.camera.fov = this.fov;
       this.camera.updateProjectionMatrix();
     }
-    // NO SPEED GLOW: bloom strength is a hard constant (see _initPostFX) and
-    // is deliberately never touched here, whatever the speed / mode / star
-    // streak. The only speed-reactive post effect left is a light CRT-style
-    // chromatic fringe while boosting — colour separation, not brightness,
-    // so it physically cannot wash the screen out.
-    this.rgbPulse = Math.max(0, this.rgbPulse - dt * 0.006);
-    const rgbTarget = 0.0005 + this.logic.boostFactor * 0.0011 + this.rgbPulse;
-    this.rgbPass.uniforms.amount.value += (rgbTarget - this.rgbPass.uniforms.amount.value) * Math.min(1, dt * 7);
+    // ---- RETRO GLITCH: corruption pulses, never brightness ----
+    // A faint VHS jitter always runs; big events (boss spawn / hit, damage,
+    // MEGA BONUS) slam uGlitch up and it decays on its own. Boosting adds a
+    // touch of extra tracking stress — signal trouble, not light.
+    this.glitchAmp *= Math.exp(-2.6 * dt);
+    const u = this.glitchPass.uniforms;
+    u.uTime.value = this.envTime;
+    u.uGlitch.value = 0.055 + this.logic.boostFactor * 0.1 + this.glitchAmp;
   }
 }
 

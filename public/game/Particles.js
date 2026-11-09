@@ -3,12 +3,14 @@ import * as THREE from 'three';
 /**
  * Particles
  * ---------
- * Pooled CPU particle system on THREE.Points with a soft-sprite shader:
- *   - peel debris on impacts (gravity chunks)
- *   - potassium pops on collection (small, brief, non-white)
- *   - golden pops on golden-banana jackpots
- * The old additive "speed lines" velocity field was removed for good:
- * NO GLOW OF SPEED anywhere — speed reads through FOV, camera and world.
+ * Pooled CPU particle system on THREE.Points — RETRO GLITCH confetti:
+ * hard-edged pixel chips (dark rim + coloured core, nearest filtering)
+ * composited with NORMAL blending. It is matter, not light: no additive
+ * pass, no soft radial glow sprite, so collect pops and double-jump bursts
+ * can physically never brighten or wash the screen.
+ *   - peel debris / potassium pops / golden jackpots / boss impacts
+ *   - MEGA BONUS confetti storms
+ * Speed FEEL comes from FOV + camera; brightness never moves.
  */
 
 const MAX_PARTICLES = 700;
@@ -34,23 +36,31 @@ const _FRAG = /* glsl */ `
   varying vec3 vColor;
   void main() {
     vec4 tex = texture2D(uMap, gl_PointCoord);
-    gl_FragColor = vec4(vColor, tex.a * vAlpha);
+    gl_FragColor = vec4(vColor * tex.rgb, tex.a * vAlpha);
     if (gl_FragColor.a < 0.01) discard;
   }
 `;
 
 function makeSpriteTexture() {
+  // RETRO GLITCH chip: a hard-edged square pixel with a dark rim. The rim
+  // multiplies the particle colour (see _FRAG) so every chip reads as a
+  // matte 8-bit confetti bit — outline and all — never as a glowing orb.
   const c = document.createElement('canvas');
   c.width = c.height = 64;
   const ctx = c.getContext('2d');
-  const g = ctx.createRadialGradient(32, 32, 2, 32, 32, 30);
-  g.addColorStop(0, 'rgba(255,255,255,1)');
-  g.addColorStop(0.4, 'rgba(255,255,255,0.85)');
-  g.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 64, 64);
+  ctx.clearRect(0, 0, 64, 64);
+  ctx.fillStyle = 'rgba(10,4,26,0.92)';
+  ctx.fillRect(6, 6, 52, 52);      // dark rim / outline
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(12, 12, 40, 40);    // white core (tinted per particle)
+  // cut the corners: chunky 8-bit silhouette
+  ctx.fillStyle = 'rgba(10,4,26,0.92)';
+  ctx.fillRect(6, 6, 5, 5); ctx.fillRect(53, 6, 5, 5);
+  ctx.fillRect(6, 53, 5, 5); ctx.fillRect(53, 53, 5, 5);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.magFilter = THREE.NearestFilter;
+  tex.minFilter = THREE.NearestFilter;
   return tex;
 }
 
@@ -78,13 +88,16 @@ export class Particles {
     geo.setAttribute('aAlpha', new THREE.BufferAttribute(this.alpha, 1));
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6); // never culled
 
+    // NORMAL blending: matte confetti composited over the world. The old
+    // additive pass IS what read as "glow on collect / double jump" — it
+    // is gone for good. Glow belongs to the road edges and nothing else.
     const mat = new THREE.ShaderMaterial({
       uniforms: { uMap: { value: makeSpriteTexture() } },
       vertexShader: _VERT,
       fragmentShader: _FRAG,
       transparent: true,
       depthWrite: false,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,
     });
 
     this.points = new THREE.Points(geo, mat);
@@ -137,13 +150,12 @@ export class Particles {
     });
   }
 
-  /** Potassium pop on star pickup — tiny and quick on purpose: collectibles
-   *  carry ZERO glow, so the pickup feedback is a brief candy pop, never a
-   *  white additive cloud. */
+  /** Potassium pop on star pickup — a tiny candy-chip pop. Collectibles
+   *  carry ZERO light: no additive cloud, no white bloom, ever. */
   starSparkle(x, y, z) {
     this.spawn(x, y, z, {
-      count: 6, spread: 0.35, speed: 4, upBias: 0.45, size: 6, life: 0.3,
-      gravity: -2, drag: 2.6, colors: [0xffd24a, 0xffb347],
+      count: 7, spread: 0.35, speed: 4.5, upBias: 0.5, size: 7, life: 0.34,
+      gravity: -2, drag: 2.8, colors: [0xffcf3f, 0xffb347, 0xe3be1a],
     });
   }
 
@@ -151,7 +163,7 @@ export class Particles {
   smashBurst(x, y, z) {
     this.spawn(x, y, z, {
       count: 22, spread: 1.2, speed: 12, upBias: 0.9, size: 11, life: 0.8,
-      gravity: 12, drag: 0.8, colors: [0xffe135, 0xff2e92, 0xffffff, 0xff6ec7],
+      gravity: 12, drag: 0.8, colors: [0xffe135, 0xff2e92, 0xff6ec7, 0xc9a80f],
     });
   }
 
@@ -173,11 +185,11 @@ export class Particles {
 
   /* ================= v2 COSMIC+ bursts ================= */
 
-  /** Near-miss graze: fast white streaks whipping past the camera. */
+  /** Near-miss graze: quick chips whipping past the camera. */
   nearMissStreak(x, y, z) {
     this.spawn(x, y, z, {
       count: 9, spread: 0.8, dir: { x: 0, y: 0, z: 1 }, speed: 18, jitter: 3.5,
-      size: 7, life: 0.24, gravity: 0, drag: 0.6, colors: [0xffffff, 0xffd9f2, 0x00ffa3],
+      size: 7, life: 0.24, gravity: 0, drag: 0.6, colors: [0xcfd8ff, 0xffd9f2, 0x00ffa3],
     });
   }
 
@@ -185,7 +197,7 @@ export class Particles {
   goldenBurst(x, y, z) {
     this.spawn(x, y, z, {
       count: 26, spread: 0.9, speed: 11, upBias: 1.0, size: 12, life: 0.85,
-      gravity: 10, drag: 0.9, colors: [0xffd700, 0xfff6c8, 0xffb700, 0xffffff],
+      gravity: 10, drag: 0.9, colors: [0xffd700, 0xfff1c4, 0xffb700, 0xffe135],
     });
   }
 
@@ -193,7 +205,7 @@ export class Particles {
   speedPadBurst(x, y, z) {
     this.spawn(x, y, z, {
       count: 14, spread: 1.6, dir: { x: 0, y: 1, z: 0 }, speed: 10, jitter: 5,
-      size: 10, life: 0.45, gravity: 6, drag: 1.2, colors: [0x00ffa3, 0xb6fff0, 0xffffff],
+      size: 10, life: 0.45, gravity: 6, drag: 1.2, colors: [0x00ffa3, 0x00c97b, 0x39d0ff],
     });
   }
 
@@ -201,7 +213,7 @@ export class Particles {
   shockwave(x, y, z) {
     this.spawn(x, y, z, {
       count: 18, spread: 2.6, speed: 8, upBias: 0.12, size: 11, life: 0.42,
-      gravity: 4, drag: 1.8, colors: [0xd8c9ff, 0xff6ec7, 0xffffff, 0x9b5de5],
+      gravity: 4, drag: 1.8, colors: [0x9b5de5, 0xff6ec7, 0x39d0ff],
     });
   }
 
@@ -210,6 +222,48 @@ export class Particles {
     this.spawn(x, y, z, {
       count: 10, spread: 0.5, speed: 6, upBias: 0.6, size: 8, life: 0.55,
       gravity: 14, drag: 1.0, colors: [0xffb35c, 0xd9a066, 0xff5500],
+    });
+  }
+
+  /* ================= v4 BOSS & MEGA BONUS confetti ================= */
+
+  /** MEGA BONUS confetti storm (boss kill): a fat multicoloured pixel rain. */
+  bonusStorm(x, y, z, count = 60) {
+    this.spawn(x, y, z, {
+      count, spread: 3.4, speed: 15, upBias: 1.5, size: 13, life: 1.3,
+      gravity: 9, drag: 0.55, colors: [0xffe135, 0xff2e92, 0x00ffa3, 0xffd700, 0xfff1c4, 0x9b5de5],
+    });
+  }
+
+  /** Boss takes a banana missile: fur + banana chips. */
+  bossHitBurst(x, y, z) {
+    this.spawn(x, y, z, {
+      count: 20, spread: 1.1, speed: 11, upBias: 1.0, size: 12, life: 0.7,
+      gravity: 11, drag: 0.8, colors: [0x8b5a2b, 0xffe135, 0xff2e92, 0x5e3d1f],
+    });
+  }
+
+  /** Boss coconut shatters on the banana. */
+  coconutBits(x, y, z) {
+    this.spawn(x, y, z, {
+      count: 10, spread: 0.4, speed: 7, upBias: 0.8, size: 9, life: 0.5,
+      gravity: 14, drag: 1.0, colors: [0x8b5a2b, 0x6e4520, 0xd9a066],
+    });
+  }
+
+  /** Boss barrel shatters on the banana. */
+  barrelBits(x, y, z) {
+    this.spawn(x, y, z, {
+      count: 14, spread: 0.6, speed: 8, upBias: 0.9, size: 10, life: 0.6,
+      gravity: 13, drag: 0.9, colors: [0x7a4a1d, 0x9c6a35, 0xffe135],
+    });
+  }
+
+  /** PEEL PATCH first-aid kit pickup. */
+  patchPop(x, y, z) {
+    this.spawn(x, y, z, {
+      count: 12, spread: 0.5, speed: 6, upBias: 1.0, size: 9, life: 0.55,
+      gravity: 5, drag: 1.4, colors: [0xfff1c4, 0xff2e92, 0x00ffa3],
     });
   }
 

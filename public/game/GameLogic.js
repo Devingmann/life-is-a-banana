@@ -4,10 +4,12 @@
  * State machine (LOADING → MENU → PLAYING ⇄ PAUSED → GAMEOVER),
  * score & aggressive difficulty scaling, ZONES (palette + music shifts every
  * 400 m), peel-layer damage, potassium meter & Super Yellow Mode, Banana
- * Split Turbo, speed pads, near-miss GRAZE bonuses, golden bananas, toast
- * barrage hits, slip chaos, void falls, anti-stuck recovery, BANANA MISSILES
- * (ammo economy + firing + smash scoring), HUD updates, arcade RANK grading
- * and floating announcements.
+ * Split Turbo, speed pads, near-miss GRAZE bonuses, golden bananas, PEEL
+ * PATCH repairs, toast barrage hits, slip chaos, void falls, anti-stuck
+ * recovery, BANANA MISSILES (ammo economy + firing + smash scoring),
+ * COMBO chains with escalating multipliers + COMBO BANK payout, ARCADE
+ * BOSS FIGHTS (SINGE SUPREME / ROI KONG COSMIQUE — killed = MEGA BONUS),
+ * HUD updates, arcade RANK grading and floating announcements.
  */
 
 const BEST_KEY = 'liab-best-v1';
@@ -20,6 +22,20 @@ const MISSILE_MAX = 6;         // HUD slots
 const MISSILE_START = 3;
 const MISSILE_CD = 0.3;        // seconds between shots
 const STARS_PER_MISSILE = 8;   // star streak → +1 ammo
+
+// ---- COMBO tiers: long chains escalate the score multiplier ----
+const COMBO_TIERS = [
+  { at: 25, mult: 12, label: 'GALAXY GRADE' },
+  { at: 15, mult: 8, label: 'COSMIC FEVER' },
+  { at: 10, mult: 5, label: 'POTASSIUM PUMP' },
+  { at: 6, mult: 3, label: 'SPLIT RUSH' },
+  { at: 3, mult: 2, label: 'BANANA BABY' },
+];
+const COMBO_TIME = 3.5;       // seconds of chain slack
+const FEVER_AT = 15;          // COSMIC FEVER: potassium charges x2
+
+// ---- BOSS scheduling: first fight at 550 m, every 3rd fight is MEGA ----
+const FIRST_BOSS_AT = 550;
 
 const ZONE_LEN = 400;
 const ZONES = [
@@ -45,7 +61,7 @@ export class GameLogic {
     Object.assign(this, deps);
     this.state = State.LOADING;
     this.time = 0;
-    this.events = []; // consumed by main.js: {type:'shake'|'slowmo'|'redflash'|'zoneflash', ...}
+    this.events = []; // consumed by main.js: {type:'shake'|'slowmo'|'redflash'|'zoneflash'|'glitch', ...}
 
     this._resetRun();
     this.best = this._loadBest();
@@ -77,8 +93,14 @@ export class GameLogic {
       goSmashed: document.getElementById('go-smashed'),
       paused: document.getElementById('paused'),
       announce: document.getElementById('announce-layer'),
+      comboEl: document.getElementById('hud-combo'),
+      comboCount: document.getElementById('combo-count'),
+      comboTierEl: document.getElementById('combo-tier'),
+      comboFill: document.getElementById('combo-fill'),
+      goMaxCombo: document.getElementById('go-maxcombo'),
+      goBosses: document.getElementById('go-bosses'),
     };
-    this._lastHud = { score: -1, dist: -1, speed: -1, peel: -1, k: -1, boost: -1, end: -1, mult: '', zone: -1, msl: -1 };
+    this._lastHud = { score: -1, dist: -1, speed: -1, peel: -1, k: -1, boost: -1, end: -1, mult: '', zone: -1, msl: -1, comboN: -1, comboTier: '', comboOn: false };
   }
 
   _resetRun() {
@@ -110,6 +132,12 @@ export class GameLogic {
     this.missileCdUntil = 0;
     this._starsSinceMissile = 0;
     this._wasBoosting = false;
+    // ---- combo & boss bookkeeping ----
+    this.maxCombo = 0;
+    this.bossesKilled = 0;
+    this.bossN = 0;
+    this.nextBossAt = FIRST_BOSS_AT;
+    this.bossCdUntil = 0;
     this.time = 0;
     this.goTime = 0;
   }
@@ -128,6 +156,7 @@ export class GameLogic {
     this.player.reset();
     this.environment.reset();
     if (this.missiles) this.missiles.clear();
+    if (this.bosses) this.bosses.clear();
     this.sound.setIntensity('menu');
     this._dom.menu.classList.remove('hidden');
     this._dom.gameover.classList.add('hidden');
@@ -154,13 +183,14 @@ export class GameLogic {
     this.player.reset();
     this.environment.reset();
     if (this.missiles) this.missiles.clear();
+    if (this.bosses) this.bosses.clear();
     this.sound.setIntensity('playing');
     this.state = State.PLAYING;
     this._dom.menu.classList.add('hidden');
     this._dom.gameover.classList.add('hidden');
     this._dom.paused.classList.add('hidden');
     this._dom.hud.classList.remove('hidden');
-    this._lastHud = { score: -1, dist: -1, speed: -1, peel: -1, k: -1, boost: -1, end: -1, mult: '', zone: -1, msl: -1 };
+    this._lastHud = { score: -1, dist: -1, speed: -1, peel: -1, k: -1, boost: -1, end: -1, mult: '', zone: -1, msl: -1, comboN: -1, comboTier: '', comboOn: false };
   }
 
   togglePause() {
@@ -214,6 +244,8 @@ export class GameLogic {
     if (this._dom.goTopSpeed) this._dom.goTopSpeed.textContent = `${Math.round(this.topSpeed * 4)} km/h`;
     if (this._dom.goNearMiss) this._dom.goNearMiss.textContent = `${this.nearMisses}`;
     if (this._dom.goSmashed) this._dom.goSmashed.textContent = `${this.smashed}`;
+    if (this._dom.goMaxCombo) this._dom.goMaxCombo.textContent = `${this.maxCombo}`;
+    if (this._dom.goBosses) this._dom.goBosses.textContent = `${this.bossesKilled}`;
 
     this._dom.gameover.classList.remove('hidden');
   }
@@ -304,15 +336,27 @@ export class GameLogic {
 
   onStar(star) {
     this.stars += 1;
+    const prevTier = this._comboTier();
     this.combo += 1;
-    this.comboTimer = 3.5;
-    this.scoreF += 50;
+    this.comboTimer = COMBO_TIME;
+    this.maxCombo = Math.max(this.maxCombo, this.combo);
+    const tier = this._comboTier();
+    // combo chains escalate the value of every star in the run
+    this.scoreF += 50 * tier.mult;
+    // COSMIC FEVER: fat chains charge potassium twice as fast
+    const fever = this.combo >= FEVER_AT;
     // no potassium charging while super is already running (avoids infinite chains)
-    if (!this.superActive) this.potassium = Math.min(1, this.potassium + POTASSIUM_PER_STAR);
+    if (!this.superActive) {
+      this.potassium = Math.min(1, this.potassium + POTASSIUM_PER_STAR * (fever ? 2 : 1));
+    }
     this.boostMeter = Math.min(1, this.boostMeter + 0.12);
     this.sound.sfxCollect(this.combo);
+    // RETRO GLITCH pickup feedback: chunky matte pixel chips, ZERO light
     this.particles.starSparkle(star.wx, star.wy, star.wz);
-    if (this.combo > 2 && this.combo % 5 === 0) this.announce(`COMBO x${this.combo}`, 'small');
+    if (tier !== prevTier && tier.label) {
+      this.announce(`${tier.label} ! x${tier.mult}`, 'small teal');
+      this.events.push({ type: 'glitch', power: 0.22 });
+    }
     // star streaks reload the banana launcher
     this._starsSinceMissile += 1;
     if (this._starsSinceMissile >= STARS_PER_MISSILE) {
@@ -322,11 +366,14 @@ export class GameLogic {
     if (this.potassium >= 1 && !this.superActive) this._triggerSuper();
   }
 
-  /** Rare golden banana pickup: jackpot. */
+  /** Rare golden banana pickup: jackpot (also feeds the combo chain). */
   onGolden(g) {
     if (this.state !== State.PLAYING) return;
     this.goldens += 1;
-    this.scoreF += 500;
+    this.combo += 3;
+    this.comboTimer = COMBO_TIME;
+    this.maxCombo = Math.max(this.maxCombo, this.combo);
+    this.scoreF += 500 * Math.max(1, this._comboTier().mult * 0.5);
     this.boostMeter = 1;
     if (!this.superActive) this.potassium = Math.min(1, this.potassium + 0.3);
     this.sound.sfxGolden();
@@ -341,6 +388,9 @@ export class GameLogic {
   onNearMiss() {
     if (this.state !== State.PLAYING || this.superActive) return;
     this.nearMisses += 1;
+    this.combo += 1;
+    this.comboTimer = COMBO_TIME;
+    this.maxCombo = Math.max(this.maxCombo, this.combo);
     const pts = 30 + Math.min(70, this.combo * 5);
     this.scoreF += pts;
     if (!this.superActive) this.potassium = Math.min(1, this.potassium + 0.02);
@@ -377,7 +427,8 @@ export class GameLogic {
     this.missileCdUntil = this.time + MISSILE_CD;
     this.missileAmmo -= 1;
     const p = this.player.position;
-    const aim = this.environment.aimAssist(p.x, p.y, p.z);
+    // while a boss fight runs, the launcher tracks the boss (missiles hit it)
+    const aim = (this.bosses && this.bosses.aimAt(p.x, p.y, p.z)) || this.environment.aimAssist(p.x, p.y, p.z);
     const speed = 46 + this.player.speed * 0.9;
     this.missiles.fire(p.x, p.y + 0.45, p.z - 1.1, aim, speed);
     this.sound.sfxMissile();
@@ -394,7 +445,8 @@ export class GameLogic {
     if (this.state !== State.PLAYING) return;
     this.smashed += 1;
     this.combo += 1;
-    this.comboTimer = 3.5;
+    this.comboTimer = COMBO_TIME;
+    this.maxCombo = Math.max(this.maxCombo, this.combo);
     const pts = 80 + Math.min(140, this.combo * 6);
     this.scoreF += pts;
     this.announce(`KABOOM ! +${pts}`, 'small teal');
@@ -406,6 +458,103 @@ export class GameLogic {
     this.missileAmmo = Math.min(MISSILE_MAX, this.missileAmmo + n);
     this.announce('MISSILE BANANE PRÊT !', 'small');
     this.sound.sfxZone();
+  }
+
+  /* ================= bosses: coconuts, barrels, waves, KILLS ================= */
+
+  /** Boss coconut hit: comedic slip, no peel damage. */
+  onCoconutHit() {
+    if (this.state !== State.PLAYING) return;
+    if (this.time < this.bossCdUntil) return;
+    this.bossCdUntil = this.time + 0.5;
+    this.player.setSlip(1.0);
+    this.sound.sfxToastHit();
+    this.announce('COCOT TÊTE !', 'danger small');
+    this.events.push({ type: 'shake', power: 0.3 });
+  }
+
+  /** Boss barrel hit: the real threat — costs a peel layer. */
+  onBarrelHit() {
+    if (this.state !== State.PLAYING) return;
+    if (this.time < this.bossCdUntil) return;
+    this.bossCdUntil = this.time + 0.9;
+    this.applyDamage(1, 'peeled');
+  }
+
+  /** Kong ground-pound shockwave: trip the banana if grounded. */
+  onWaveHit() {
+    if (this.state !== State.PLAYING) return;
+    if (this.time < this.bossCdUntil) return;
+    this.bossCdUntil = this.time + 0.6;
+    this.player.setSlip(0.9);
+    this.sound.sfxSlip();
+    this.announce('SECOUSSE ROYALE !', 'danger small');
+    this.events.push({ type: 'shake', power: 0.3 });
+  }
+
+  /** Boss gave up (timer out / banana too fast): small consolation. */
+  onBossFlee(kind) {
+    if (this.state !== State.PLAYING) return;
+    this.scoreF += 300;
+    this.sound.setIntensity('playing');
+    this.announce(kind === 'mega' ? 'LE ROI S’EST ENFUI ! LÂCHE ! +300' : 'LE SINGE S’EST ENFUI ! +300', 'small');
+    this.events.push({ type: 'glitch', power: 0.5 });
+    this.nextBossAt = this.distance + 650;
+  }
+
+  /** A banana missile connected with the boss — KABOOM + maybe MEGA BONUS. */
+  onBossMissileHit(hit) {
+    const res = this.bosses ? this.bosses.damage() : null;
+    if (!res) return;
+    this.particles.bossHitBurst(res.x, res.y, res.z);
+    this.sound.sfxExplosion();
+    this.events.push({ type: 'shake', power: 0.35 });
+    this.events.push({ type: 'glitch', power: 0.4 });
+    if (this.state !== State.PLAYING) return;
+    this.combo += 1;
+    this.comboTimer = COMBO_TIME;
+    this.maxCombo = Math.max(this.maxCombo, this.combo);
+    if (res.killed) {
+      this.bossesKilled += 1;
+      const mega = res.kind === 'mega';
+      const pts = mega ? 10000 : 2500;
+      this.scoreF += pts;
+      // MEGA BONUS: peel repair + full ammo + full endurance + potassium
+      this.peel = Math.min(4, this.peel + (mega ? 4 : 1));
+      this.player.restorePeel(mega ? 4 : 1);
+      this.missileAmmo = MISSILE_MAX;
+      this.player.endurance = 1;
+      this.boostMeter = 1;
+      if (!this.superActive) this.potassium = mega ? 1 : Math.min(1, this.potassium + 0.45);
+      this.sound.sfxMegaBonus();
+      this.sound.setIntensity('playing');
+      this.announce(mega ? 'ROI KONG VAINCU !! MEGA JACKPOT +10000' : 'SINGE ÉCRASÉ !! MEGA BONUS +2500', 'big');
+      this.particles.bonusStorm(this.player.position.x, 2.6, this.player.position.z - 6, mega ? 90 : 55);
+      this.events.push({ type: 'slowmo', scale: 0.3, dur: 0.55 });
+      this.events.push({ type: 'glitch', power: 1 });
+      this.nextBossAt = this.distance + (mega ? 1500 : 750);
+      if (this.potassium >= 1 && !this.superActive) this._triggerSuper();
+    } else {
+      this.scoreF += 150;
+      this.announce(`TOUCHE ! ${res.hp}/${res.maxHp}`, 'small');
+    }
+  }
+
+  /** PEEL PATCH first-aid kit: repairs a torn peel layer (or pays points). */
+  onPatch(p) {
+    if (this.state !== State.PLAYING) return;
+    this.sound.sfxPatch();
+    this.particles.patchPop(p.wx, p.wy, p.wz);
+    if (this.peel < 4) {
+      this.peel += 1;
+      this.player.restorePeel(1);
+      this.scoreF += 100;
+      this.announce('PEEL RÉPARÉ ! +1', 'small teal');
+      this.events.push({ type: 'glitch', power: 0.25 });
+    } else {
+      this.scoreF += 250;
+      this.announce('PANSEMENT GASPILLÉ ! +250', 'small');
+    }
   }
 
   _triggerSuper() {
@@ -489,10 +638,52 @@ export class GameLogic {
     this.scoreF += player.speed * dt * 12 * mult;
     this.score = Math.floor(this.scoreF);
 
-    // ---- combo decay ----
+    // ---- combo decay + COMBO BANK payout ----
     if (this.comboTimer > 0) {
       this.comboTimer -= dt;
-      if (this.comboTimer <= 0) this.combo = 0;
+      if (this.comboTimer <= 0) {
+        if (this.combo >= 6) {
+          const bank = this.combo * 15;
+          this.scoreF += bank;
+          this.announce(`COMBO BANKÉE ! +${bank}`, 'small teal');
+        }
+        this.combo = 0;
+      }
+    }
+
+    // ---- ARCADE BOSSES: SINGE SUPREME & ROI KONG COSMIQUE ----
+    if (this.bosses) {
+      if (!this.bosses.boss && this.distance >= this.nextBossAt) {
+        this.bossN += 1;
+        const kind = this.bossN % 3 === 0 ? 'mega' : 'mini';
+        this.bosses.spawn(kind, player.position.z);
+        this.sound.sfxBoss(kind === 'mega');
+        this.sound.setIntensity('super'); // boss music!
+        this.announce(kind === 'mega'
+          ? '!! BOSS: ROI KONG COSMIQUE !!'
+          : '!! MINI-BOSS: SINGE SUPREME !!', 'boss');
+        this.events.push({ type: 'glitch', power: 1 });
+        this.events.push({ type: 'shake', power: 0.5 });
+        this.events.push({ type: 'slowmo', scale: 0.55, dur: 0.3 });
+      }
+      if (this.bosses.boss) {
+        this.bosses.update(dt, {
+          active: true,
+          playerPos: player.position,
+          playerSpeed: player.speed,
+          time: this.time,
+          particles: this.particles,
+          onTaunt: (t) => this.announce(t, 'danger small'),
+          onCoconutHit: () => this.onCoconutHit(),
+          onBarrelHit: () => this.onBarrelHit(),
+          onWaveHit: () => this.onWaveHit(),
+          onPound: () => {
+            this.sound.sfxDiveLand();
+            this.events.push({ type: 'shake', power: 0.45 });
+          },
+          onFlee: (kind) => this.onBossFlee(kind),
+        });
+      }
     }
 
     // ---- existential void check ----
@@ -572,6 +763,32 @@ export class GameLogic {
       d.mult.classList.toggle('hidden', mLabel === '');
       h.mult = mLabel;
     }
+
+    // ---- COMBO chain (tiers + timer bar) ----
+    const tier = this._comboTier();
+    const showCombo = this.combo >= 2;
+    if (showCombo !== h.comboOn || this.combo !== h.comboN || tier.label !== h.comboTier) {
+      h.comboOn = showCombo;
+      h.comboN = this.combo;
+      h.comboTier = tier.label;
+      if (d.comboEl) {
+        d.comboEl.classList.toggle('hidden', !showCombo);
+        d.comboEl.classList.toggle('fever', tier.mult >= 8);
+        if (d.comboCount) d.comboCount.textContent = `x${this.combo}`;
+        if (d.comboTierEl) d.comboTierEl.textContent = tier.label || 'COMBO';
+      }
+    }
+    if (showCombo && d.comboFill) {
+      d.comboFill.style.width = `${Math.round(Math.max(0, Math.min(1, this.comboTimer / COMBO_TIME)) * 100)}%`;
+    }
+  }
+
+  /** Current combo tier (identity-comparable object or the base tier). */
+  _comboTier() {
+    for (const t of COMBO_TIERS) {
+      if (this.combo >= t.at) return t;
+    }
+    return { at: 0, mult: 1, label: null };
   }
 
   announce(text, cls = '') {

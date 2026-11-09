@@ -1,0 +1,812 @@
+     1→/**
+     2→ * GameLogic
+     3→ * ---------
+     4→ * State machine (LOADING → MENU → PLAYING ⇄ PAUSED → GAMEOVER),
+     5→ * score & aggressive difficulty scaling, ZONES (palette + music shifts every
+     6→ * 400 m), peel-layer damage, potassium meter & Super Yellow Mode, Banana
+     7→ * Split Turbo, speed pads, near-miss GRAZE bonuses, golden bananas, PEEL
+     8→ * PATCH repairs, toast barrage hits, slip chaos, void falls, anti-stuck
+     9→ * recovery, BANANA MISSILES (ammo economy + firing + smash scoring),
+    10→ * COMBO chains with escalating multipliers + COMBO BANK payout, ARCADE
+    11→ * BOSS FIGHTS (SINGE SUPREME / ROI KONG COSMIQUE — killed = MEGA BONUS),
+    12→ * HUD updates, arcade RANK grading and floating announcements.
+    13→ */
+    14→
+    15→const BEST_KEY = 'liab-best-v1';
+    16→const SUPER_DURATION = 6.2;
+    17→const POTASSIUM_PER_STAR = 0.08;
+    18→const BOOST_DRAIN = 1 / 2.2;   // full meter = 2.2s of boost
+    19→const BOOST_REGEN = 1 / 5.0;
+    20→
+    21→const MISSILE_MAX = 6;         // HUD slots
+    22→const MISSILE_START = 3;
+    23→const MISSILE_CD = 0.3;        // seconds between shots
+    24→const STARS_PER_MISSILE = 8;   // star streak → +1 ammo
+    25→
+    26→// ---- COMBO tiers: long chains escalate the score multiplier ----
+    27→const COMBO_TIERS = [
+    28→  { at: 25, mult: 12, label: 'GALAXY GRADE' },
+    29→  { at: 15, mult: 8, label: 'COSMIC FEVER' },
+    30→  { at: 10, mult: 5, label: 'POTASSIUM PUMP' },
+    31→  { at: 6, mult: 3, label: 'SPLIT RUSH' },
+    32→  { at: 3, mult: 2, label: 'BANANA BABY' },
+    33→];
+    34→const COMBO_TIME = 3.5;       // seconds of chain slack
+    35→const FEVER_AT = 15;          // COSMIC FEVER: potassium charges x2
+    36→
+    37→// ---- BOSS scheduling: first fight at 550 m, every 3rd fight is MEGA ----
+    38→const FIRST_BOSS_AT = 550;
+    39→
+    40→const ZONE_LEN = 400;
+    41→const ZONES = [
+    42→  { name: 'JUNGLE NÉON' },
+    43→  { name: 'OURAGAN VIOLET' },
+    44→  { name: 'INFERNO SOLAIRE' },
+    45→  { name: 'VIDE FANTÔME' },
+    46→  { name: 'SINGULARITÉ BANANE' },
+    47→];
+    48→const ROMAN = ['', ' II', ' III', ' IV', ' V', ' VI', ' VII', ' VIII', ' IX', ' X'];
+    49→
+    50→export const State = { LOADING: 'LOADING', MENU: 'MENU', PLAYING: 'PLAYING', PAUSED: 'PAUSED', GAMEOVER: 'GAMEOVER' };
+    51→
+    52→export class GameLogic {
+    53→  /**
+    54→   * @param {{player:import('./Player.js').Player,
+    55→   *          environment:import('./Environment.js').Environment,
+    56→   *          particles:import('./Particles.js').Particles,
+    57→   *          missiles:import('./Missiles.js').Missiles,
+    58→   *          sound:import('./SoundManager.js').SoundManager}} deps
+    59→   */
+    60→  constructor(deps) {
+    61→    Object.assign(this, deps);
+    62→    this.state = State.LOADING;
+    63→    this.time = 0;
+    64→    this.events = []; // consumed by main.js: {type:'shake'|'slowmo'|'redflash'|'zoneflash'|'glitch', ...}
+    65→
+    66→    this._resetRun();
+    67→    this.best = this._loadBest();
+    68→
+    69→    this._dom = {
+    70→      hud: document.getElementById('hud'),
+    71→      score: document.getElementById('hud-score'),
+    72→      dist: document.getElementById('hud-dist'),
+    73→      speed: document.getElementById('hud-speed'),
+    74→      mult: document.getElementById('hud-mult'),
+    75→      zone: document.getElementById('hud-zone'),
+    76→      eFill: document.getElementById('e-fill'),
+    77→      kFill: document.getElementById('k-fill'),
+    78→      boostFill: document.getElementById('boost-fill'),
+    79→      peelIcons: Array.from(document.querySelectorAll('#peel-icons .peel-icon')),
+    80→      missileIcons: Array.from(document.querySelectorAll('#missile-icons .missile-icon')),
+    81→      menu: document.getElementById('menu'),
+    82→      menuBest: document.getElementById('menu-best'),
+    83→      gameover: document.getElementById('gameover'),
+    84→      goScore: document.getElementById('go-score'),
+    85→      goDist: document.getElementById('go-dist'),
+    86→      goStars: document.getElementById('go-stars'),
+    87→      goBest: document.getElementById('go-best'),
+    88→      goReason: document.getElementById('go-reason'),
+    89→      goNewBest: document.getElementById('go-newbest'),
+    90→      goRank: document.getElementById('go-rank'),
+    91→      goTopSpeed: document.getElementById('go-topspeed'),
+    92→      goNearMiss: document.getElementById('go-nearmiss'),
+    93→      goSmashed: document.getElementById('go-smashed'),
+    94→      paused: document.getElementById('paused'),
+    95→      announce: document.getElementById('announce-layer'),
+    96→      comboEl: document.getElementById('hud-combo'),
+    97→      comboCount: document.getElementById('combo-count'),
+    98→      comboTierEl: document.getElementById('combo-tier'),
+    99→      comboFill: document.getElementById('combo-fill'),
+   100→      goMaxCombo: document.getElementById('go-maxcombo'),
+   101→      goBosses: document.getElementById('go-bosses'),
+   102→    };
+   103→    this._lastHud = { score: -1, dist: -1, speed: -1, peel: -1, k: -1, boost: -1, end: -1, mult: '', zone: -1, msl: -1, comboN: -1, comboTier: '', comboOn: false };
+   104→  }
+   105→
+   106→  _resetRun() {
+   107→    this.score = 0;
+   108→    this.scoreF = 0;
+   109→    this.distance = 0;
+   110→    this.stars = 0;
+   111→    this.goldens = 0;
+   112→    this.combo = 0;
+   113→    this.comboTimer = 0;
+   114→    this.potassium = 0;
+   115→    this.peel = 4;
+   116→    this.difficulty = 0;
+   117→    this.targetSpeed = 0;
+   118→    this.boostMeter = 1;
+   119→    this.boostActive = false;
+   120→    this.boostFactor = 0;
+   121→    this.superActive = false;
+   122→    this.superTimer = 0;
+   123→    this.invulnUntil = 0;
+   124→    this.slipping = false;
+   125→    this.zone = 0;
+   126→    this.topSpeed = 0;
+   127→    this.nearMisses = 0;
+   128→    this.smashed = 0;
+   129→    this.speedPadUntil = 0;
+   130→    this.toastCdUntil = 0;
+   131→    this.missileAmmo = MISSILE_START;
+   132→    this.missileCdUntil = 0;
+   133→    this._starsSinceMissile = 0;
+   134→    this._wasBoosting = false;
+   135→    // ---- combo & boss bookkeeping ----
+   136→    this.maxCombo = 0;
+   137→    this.bossesKilled = 0;
+   138→    this.bossN = 0;
+   139→    this.nextBossAt = FIRST_BOSS_AT;
+   140→    this.bossCdUntil = 0;
+   141→    this.time = 0;
+   142→    this.goTime = 0;
+   143→  }
+   144→
+   145→  /** Speed-pad (or dive-stomp) speed burst currently running? */
+   146→  get padActive() { return this.time < this.speedPadUntil; }
+   147→
+   148→  /** Short dive-landing speed pop. */
+   149→  diveBoost() { this.speedPadUntil = Math.max(this.speedPadUntil, this.time + 0.45); }
+   150→
+   151→  /* ================= state transitions ================= */
+   152→
+   153→  toMenu() {
+   154→    this.state = State.MENU;
+   155→    this._resetRun();
+   156→    this.player.reset();
+   157→    this.environment.reset();
+   158→    if (this.missiles) this.missiles.clear();
+   159→    if (this.bosses) this.bosses.clear();
+   160→    this.sound.setIntensity('menu');
+   161→    this._dom.menu.classList.remove('hidden');
+   162→    this._dom.gameover.classList.add('hidden');
+   163→    this._dom.paused.classList.add('hidden');
+   164→    this._dom.hud.classList.add('hidden');
+   165→    this._dom.menuBest.textContent = `BEST SCORE: ${this.best.toLocaleString()}`;
+   166→  }
+   167→
+   168→  start() {
+   169→    this.sound.init();
+   170→    this.sound.sfxClick();
+   171→    this._beginRun();
+   172→    this.announce('LA VIE EST UNE BANANE!', 'teal');
+   173→  }
+   174→
+   175→  restart() {
+   176→    this.sound.sfxClick();
+   177→    this._beginRun();
+   178→    this.announce('RE-PEELED. GO!', 'teal');
+   179→  }
+   180→
+   181→  _beginRun() {
+   182→    this._resetRun();
+   183→    this.player.reset();
+   184→    this.environment.reset();
+   185→    if (this.missiles) this.missiles.clear();
+   186→    if (this.bosses) this.bosses.clear();
+   187→    this.sound.setIntensity('playing');
+   188→    this.state = State.PLAYING;
+   189→    this._dom.menu.classList.add('hidden');
+   190→    this._dom.gameover.classList.add('hidden');
+   191→    this._dom.paused.classList.add('hidden');
+   192→    this._dom.hud.classList.remove('hidden');
+   193→    this._lastHud = { score: -1, dist: -1, speed: -1, peel: -1, k: -1, boost: -1, end: -1, mult: '', zone: -1, msl: -1, comboN: -1, comboTier: '', comboOn: false };
+   194→  }
+   195→
+   196→  togglePause() {
+   197→    if (this.state === State.PLAYING) {
+   198→      this.state = State.PAUSED;
+   199→      this._dom.paused.classList.remove('hidden');
+   200→      this.sound.suspend();
+   201→    } else if (this.state === State.PAUSED) {
+   202→      this.state = State.PLAYING;
+   203→      this._dom.paused.classList.add('hidden');
+   204→      this.sound.resume();
+   205→    }
+   206→  }
+   207→
+   208→  quitToMenu() {
+   209→    this.sound.resume();
+   210→    this.toMenu();
+   211→  }
+   212→
+   213→  gameOver(reason) {
+   214→    if (this.state !== State.PLAYING) return;
+   215→    this.state = State.GAMEOVER;
+   216→    this.goTime = performance.now(); // guards accidental instant restarts
+   217→    this.sound.setIntensity('menu');
+   218→    this.sound.sfxGameOver();
+   219→    this.events.push({ type: 'slowmo', scale: 0.25, dur: 0.8 });
+   220→    this.events.push({ type: 'shake', power: 1 });
+   221→
+   222→    const isBest = this.score > this.best;
+   223→    if (isBest) {
+   224→      this.best = this.score;
+   225→      this._saveBest();
+   226→    }
+   227→    const reasons = {
+   228→      peeled: 'You hit something. Something hit back harder.',
+   229→      void: 'The Existential Void swallowed your potassium.',
+   230→    };
+   231→    this._dom.goReason.textContent = reasons[reason] || 'The cosmos slipped on you.';
+   232→    this._dom.goScore.textContent = this.score.toLocaleString();
+   233→    this._dom.goDist.textContent = `${Math.floor(this.distance)} m`;
+   234→    this._dom.goStars.textContent = `${this.stars}`;
+   235→    this._dom.goBest.textContent = this.best.toLocaleString();
+   236→    this._dom.goNewBest.classList.toggle('hidden', !isBest);
+   237→
+   238→    // ---- arcade RANK + run stats ----
+   239→    const rank = this._rank(this.score);
+   240→    if (this._dom.goRank) {
+   241→      this._dom.goRank.textContent = rank.r;
+   242→      this._dom.goRank.className = `go-rank ${rank.cls}`;
+   243→    }
+   244→    if (this._dom.goTopSpeed) this._dom.goTopSpeed.textContent = `${Math.round(this.topSpeed * 4)} km/h`;
+   245→    if (this._dom.goNearMiss) this._dom.goNearMiss.textContent = `${this.nearMisses}`;
+   246→    if (this._dom.goSmashed) this._dom.goSmashed.textContent = `${this.smashed}`;
+   247→    if (this._dom.goMaxCombo) this._dom.goMaxCombo.textContent = `${this.maxCombo}`;
+   248→    if (this._dom.goBosses) this._dom.goBosses.textContent = `${this.bossesKilled}`;
+   249→
+   250→    this._dom.gameover.classList.remove('hidden');
+   251→  }
+   252→
+   253→  _rank(score) {
+   254→    if (score >= 60000) return { r: 'S+', cls: 'rank-splus' };
+   255→    if (score >= 35000) return { r: 'S', cls: 'rank-s' };
+   256→    if (score >= 20000) return { r: 'A', cls: 'rank-a' };
+   257→    if (score >= 10000) return { r: 'B', cls: 'rank-b' };
+   258→    if (score >= 4000) return { r: 'C', cls: 'rank-c' };
+   259→    return { r: 'D', cls: 'rank-d' };
+   260→  }
+   261→
+   262→  /* ================= collisions & pickups ================= */
+   263→
+   264→  handleCollision(kind, body) {
+   265→    if (this.state !== State.PLAYING) return;
+   266→    if (kind === 'obstacle') {
+   267→      if (body.userData.dead) return;
+   268→      if (this.superActive) {
+   269→        const pos = this.environment.smashObstacle(body);
+   270→        if (pos) this.particles.smashBurst(pos.x, pos.y, pos.z);
+   271→        this.sound.sfxSmash();
+   272→        this.smashed += 1;
+   273→        this.scoreF += 60;
+   274→        this.announce('SMASHED! +60', 'small');
+   275→        return;
+   276→      }
+   277→      // The WHOLE response (bounce + damage) is gated by invulnerability and
+   278→      // a per-obstacle cooldown. Previously the knockback fired on every new
+   279→      // contact, so one bump could chain into the next obstacle and the run
+   280→      // degenerated into a permanent stun-lock ("the banana stopped working").
+   281→      const now = this.time;
+   282→      if (now < this.invulnUntil) return;
+   283→      if (body.userData.lastHit !== undefined && now - body.userData.lastHit < 0.8) return;
+   284→      body.userData.lastHit = now;
+   285→
+   286→      // Comedic bounce that CLEARS the obstacle: high arc + strong sideways
+   287→      // shove so the banana lands beside/behind the box instead of wedging
+   288→      // against its face (the root cause of the "stuck after 5s" freeze).
+   289→      const v = this.player.body.velocity;
+   290→      const knock = (body.userData.knock || 8) * 0.5;
+   291→      const side = Math.sign(this.player.position.x - body.position.x) || (Math.random() < 0.5 ? -1 : 1);
+   292→      v.z = knock;                 // short backward hop (forward is -Z)
+   293→      v.y = Math.max(v.y, 7.4);    // big arc — flies OVER the hitbox
+   294→      v.x = side * 7.5;            // slides decisively PAST it
+   295→      this.player.stun(0.32);
+   296→      this.applyDamage(body.userData.damage || 1, 'peeled');
+   297→    } else if (kind === 'slipzone') {
+   298→      const now = this.time;
+   299→      if (body.userData.lastTrig !== undefined && now - body.userData.lastTrig < 2) return;
+   300→      body.userData.lastTrig = now;
+   301→      this.player.setSlip(1.35);
+   302→      this.sound.sfxSlip();
+   303→      this.announce('WHOOPS!', 'danger small');
+   304→      this.events.push({ type: 'shake', power: 0.35 });
+   305→    } else if (kind === 'speedpad') {
+   306→      const now = this.time;
+   307→      if (body.userData.lastTrig !== undefined && now - body.userData.lastTrig < 1.4) return;
+   308→      body.userData.lastTrig = now;
+   309→      this.speedPadUntil = Math.max(this.speedPadUntil, now + 1.15);
+   310→      this.sound.sfxSpeedPad();
+   311→      this.particles.speedPadBurst(this.player.position.x, 0.3, this.player.position.z);
+   312→      this.announce('ZOOM !', 'small teal');
+   313→    }
+   314→  }
+   315→
+   316→  applyDamage(n, reason) {
+   317→    if (this.state !== State.PLAYING) return;
+   318→    if (this.time < this.invulnUntil || this.superActive) return;
+   319→    this.peel -= n;
+   320→    this.player.setInvuln(1.5);
+   321→    this.particles.peelBurst(
+   322→      this.player.position.x, this.player.position.y, this.player.position.z
+   323→    );
+   324→    this.sound.sfxPeelHit();
+   325→    this.events.push({ type: 'shake', power: 0.8 });
+   326→    this.events.push({ type: 'slowmo', scale: 0.35, dur: 0.32 });
+   327→    this.events.push({ type: 'redflash' });
+   328→    if (this.peel <= 0) {
+   329→      this.peel = 0;
+   330→      this.gameOver(reason);
+   331→    } else {
+   332→      this.player.ejectPeel();
+   333→      this.announce('PEEL LOST!', 'danger');
+   334→    }
+   335→  }
+   336→
+   337→  onStar(star) {
+   338→    this.stars += 1;
+   339→    const prevTier = this._comboTier();
+   340→    this.combo += 1;
+   341→    this.comboTimer = COMBO_TIME;
+   342→    this.maxCombo = Math.max(this.maxCombo, this.combo);
+   343→    const tier = this._comboTier();
+   344→    // combo chains escalate the value of every star in the run
+   345→    this.scoreF += 50 * tier.mult;
+   346→    // COSMIC FEVER: fat chains charge potassium twice as fast
+   347→    const fever = this.combo >= FEVER_AT;
+   348→    // no potassium charging while super is already running (avoids infinite chains)
+   349→    if (!this.superActive) {
+   350→      this.potassium = Math.min(1, this.potassium + POTASSIUM_PER_STAR * (fever ? 2 : 1));
+   351→    }
+   352→    this.boostMeter = Math.min(1, this.boostMeter + 0.12);
+   353→    this.sound.sfxCollect(this.combo);
+   354→    // RETRO GLITCH pickup feedback: chunky matte pixel chips, ZERO light
+   355→    this.particles.starSparkle(star.wx, star.wy, star.wz);
+   356→    if (tier !== prevTier && tier.label) {
+   357→      this.announce(`${tier.label} ! x${tier.mult}`, 'small teal');
+   358→      this.events.push({ type: 'glitch', power: 0.22 });
+   359→    }
+   360→    // star streaks reload the banana launcher
+   361→    this._starsSinceMissile += 1;
+   362→    if (this._starsSinceMissile >= STARS_PER_MISSILE) {
+   363→      this._starsSinceMissile = 0;
+   364→      this._grantMissile(1);
+   365→    }
+   366→    if (this.potassium >= 1 && !this.superActive) this._triggerSuper();
+   367→  }
+   368→
+   369→  /** Rare golden banana pickup: jackpot (also feeds the combo chain). */
+   370→  onGolden(g) {
+   371→    if (this.state !== State.PLAYING) return;
+   372→    this.goldens += 1;
+   373→    this.combo += 3;
+   374→    this.comboTimer = COMBO_TIME;
+   375→    this.maxCombo = Math.max(this.maxCombo, this.combo);
+   376→    this.scoreF += 500 * Math.max(1, this._comboTier().mult * 0.5);
+   377→    this.boostMeter = 1;
+   378→    if (!this.superActive) this.potassium = Math.min(1, this.potassium + 0.3);
+   379→    this.sound.sfxGolden();
+   380→    this.particles.goldenBurst(g.wx, g.wy, g.wz);
+   381→    this.announce('BANANE DORÉE ! +500', 'big');
+   382→    this.events.push({ type: 'slowmo', scale: 0.5, dur: 0.22 });
+   383→    this._grantMissile(2);
+   384→    if (this.potassium >= 1 && !this.superActive) this._triggerSuper();
+   385→  }
+   386→
+   387→  /** Grazed an obstacle at speed without getting hit: risk pays. */
+   388→  onNearMiss() {
+   389→    if (this.state !== State.PLAYING || this.superActive) return;
+   390→    this.nearMisses += 1;
+   391→    this.combo += 1;
+   392→    this.comboTimer = COMBO_TIME;
+   393→    this.maxCombo = Math.max(this.maxCombo, this.combo);
+   394→    const pts = 30 + Math.min(70, this.combo * 5);
+   395→    this.scoreF += pts;
+   396→    if (!this.superActive) this.potassium = Math.min(1, this.potassium + 0.02);
+   397→    this.sound.sfxNearMiss();
+   398→    this.events.push({ type: 'slowmo', scale: 0.78, dur: 0.1 });
+   399→    if (this.nearMisses % 3 === 1) this.announce(`FRÔLÉ ! +${pts}`, 'small teal');
+   400→    if (this.potassium >= 1 && !this.superActive) this._triggerSuper();
+   401→  }
+   402→
+   403→  /** Hot toast projectile hit: chaos, no peel damage. */
+   404→  onToastHit() {
+   405→    if (this.state !== State.PLAYING) return;
+   406→    if (this.time < this.toastCdUntil) return;
+   407→    this.toastCdUntil = this.time + 0.6;
+   408→    this.player.setSlip(0.9);
+   409→    this.sound.sfxToastHit();
+   410→    this.announce('TOASTÉ !', 'danger small');
+   411→    this.events.push({ type: 'shake', power: 0.3 });
+   412→  }
+   413→
+   414→  /* ================= banana missiles ================= */
+   415→
+   416→  /** Fire a banana missile (F / E / click). Auto-aims at the nearest
+   417→   *  obstacle ahead; ammo comes from star streaks + golden bananas. */
+   418→  fireMissile() {
+   419→    if (this.state !== State.PLAYING) return;
+   420→    if (this.time < this.missileCdUntil) return;
+   421→    if (this.missileAmmo <= 0) {
+   422→      this.missileCdUntil = this.time + 0.35; // spam guard on the empty click
+   423→      this.sound.sfxEmpty();
+   424→      this.announce('PLUS DE MISSILES — RAMASSE DES ÉTOILES !', 'small danger');
+   425→      return;
+   426→    }
+   427→    this.missileCdUntil = this.time + MISSILE_CD;
+   428→    this.missileAmmo -= 1;
+   429→    const p = this.player.position;
+   430→    // while a boss fight runs, the launcher tracks the boss (missiles hit it)
+   431→    const aim = (this.bosses && this.bosses.aimAt(p.x, p.y, p.z)) || this.environment.aimAssist(p.x, p.y, p.z);
+   432→    const speed = 46 + this.player.speed * 0.9;
+   433→    this.missiles.fire(p.x, p.y + 0.45, p.z - 1.1, aim, speed);
+   434→    this.sound.sfxMissile();
+   435→    // no muzzle flash: missiles are glow-free by design
+   436→  }
+   437→
+   438→  /** Missile reached an obstacle: KABOOM + smash scoring. */
+   439→  onMissileHit(hit) {
+   440→    const pos = this.environment.smashObstacle(hit.body);
+   441→    if (!pos) return;
+   442→    this.particles.smashBurst(pos.x, pos.y, pos.z);
+   443→    this.sound.sfxExplosion();
+   444→    this.events.push({ type: 'shake', power: 0.5 });
+   445→    if (this.state !== State.PLAYING) return;
+   446→    this.smashed += 1;
+   447→    this.combo += 1;
+   448→    this.comboTimer = COMBO_TIME;
+   449→    this.maxCombo = Math.max(this.maxCombo, this.combo);
+   450→    const pts = 80 + Math.min(140, this.combo * 6);
+   451→    this.scoreF += pts;
+   452→    this.announce(`KABOOM ! +${pts}`, 'small teal');
+   453→    this.events.push({ type: 'slowmo', scale: 0.62, dur: 0.1 });
+   454→  }
+   455→
+   456→  _grantMissile(n) {
+   457→    if (this.missileAmmo >= MISSILE_MAX) return;
+   458→    this.missileAmmo = Math.min(MISSILE_MAX, this.missileAmmo + n);
+   459→    this.announce('MISSILE BANANE PRÊT !', 'small');
+   460→    this.sound.sfxZone();
+   461→  }
+   462→
+   463→  /* ================= bosses: coconuts, barrels, waves, KILLS ================= */
+   464→
+   465→  /** Boss coconut hit: comedic slip, no peel damage. */
+   466→  onCoconutHit() {
+   467→    if (this.state !== State.PLAYING) return;
+   468→    if (this.time < this.bossCdUntil) return;
+   469→    this.bossCdUntil = this.time + 0.5;
+   470→    this.player.setSlip(1.0);
+   471→    this.sound.sfxToastHit();
+   472→    this.announce('COCOT TÊTE !', 'danger small');
+   473→    this.events.push({ type: 'shake', power: 0.3 });
+   474→  }
+   475→
+   476→  /** Boss barrel hit: the real threat — costs a peel layer. */
+   477→  onBarrelHit() {
+   478→    if (this.state !== State.PLAYING) return;
+   479→    if (this.time < this.bossCdUntil) return;
+   480→    this.bossCdUntil = this.time + 0.9;
+   481→    this.applyDamage(1, 'peeled');
+   482→  }
+   483→
+   484→  /** Kong ground-pound shockwave: trip the banana if grounded. */
+   485→  onWaveHit() {
+   486→    if (this.state !== State.PLAYING) return;
+   487→    if (this.time < this.bossCdUntil) return;
+   488→    this.bossCdUntil = this.time + 0.6;
+   489→    this.player.setSlip(0.9);
+   490→    this.sound.sfxSlip();
+   491→    this.announce('SECOUSSE ROYALE !', 'danger small');
+   492→    this.events.push({ type: 'shake', power: 0.3 });
+   493→  }
+   494→
+   495→  /** Boss gave up (timer out / banana too fast): small consolation. */
+   496→  onBossFlee(kind) {
+   497→    if (this.state !== State.PLAYING) return;
+   498→    this.scoreF += 300;
+   499→    this.sound.setIntensity('playing');
+   500→    this.announce(kind === 'mega' ? 'LE ROI S’EST ENFUI ! LÂCHE ! +300' : 'LE SINGE S’EST ENFUI ! +300', 'small');
+   501→    this.events.push({ type: 'glitch', power: 0.5 });
+   502→    this.nextBossAt = this.distance + 650;
+   503→  }
+   504→
+   505→  /** A banana missile connected with the boss — KABOOM + maybe MEGA BONUS. */
+   506→  onBossMissileHit(hit) {
+   507→    const res = this.bosses ? this.bosses.damage() : null;
+   508→    if (!res) return;
+   509→    this.particles.bossHitBurst(res.x, res.y, res.z);
+   510→    this.sound.sfxExplosion();
+   511→    this.events.push({ type: 'shake', power: 0.35 });
+   512→    this.events.push({ type: 'glitch', power: 0.4 });
+   513→    if (this.state !== State.PLAYING) return;
+   514→    this.combo += 1;
+   515→    this.comboTimer = COMBO_TIME;
+   516→    this.maxCombo = Math.max(this.maxCombo, this.combo);
+   517→    if (res.killed) {
+   518→      this.bossesKilled += 1;
+   519→      const mega = res.kind === 'mega';
+   520→      const pts = mega ? 10000 : 2500;
+   521→      this.scoreF += pts;
+   522→      // MEGA BONUS: peel repair + full ammo + full endurance + potassium
+   523→      this.peel = Math.min(4, this.peel + (mega ? 4 : 1));
+   524→      this.player.restorePeel(mega ? 4 : 1);
+   525→      this.missileAmmo = MISSILE_MAX;
+   526→      this.player.endurance = 1;
+   527→      this.boostMeter = 1;
+   528→      if (!this.superActive) this.potassium = mega ? 1 : Math.min(1, this.potassium + 0.45);
+   529→      this.sound.sfxMegaBonus();
+   530→      this.sound.setIntensity('playing');
+   531→      this.announce(mega ? 'ROI KONG VAINCU !! MEGA JACKPOT +10000' : 'SINGE ÉCRASÉ !! MEGA BONUS +2500', 'big');
+   532→      this.particles.bonusStorm(this.player.position.x, 2.6, this.player.position.z - 6, mega ? 90 : 55);
+   533→      this.events.push({ type: 'slowmo', scale: 0.3, dur: 0.55 });
+   534→      this.events.push({ type: 'glitch', power: 1 });
+   535→      this.nextBossAt = this.distance + (mega ? 1500 : 750);
+   536→      if (this.potassium >= 1 && !this.superActive) this._triggerSuper();
+   537→    } else {
+   538→      this.scoreF += 150;
+   539→      this.announce(`TOUCHE ! ${res.hp}/${res.maxHp}`, 'small');
+   540→    }
+   541→  }
+   542→
+   543→  /** PEEL PATCH first-aid kit: repairs a torn peel layer (or pays points). */
+   544→  onPatch(p) {
+   545→    if (this.state !== State.PLAYING) return;
+   546→    this.sound.sfxPatch();
+   547→    this.particles.patchPop(p.wx, p.wy, p.wz);
+   548→    if (this.peel < 4) {
+   549→      this.peel += 1;
+   550→      this.player.restorePeel(1);
+   551→      this.scoreF += 100;
+   552→      this.announce('PEEL RÉPARÉ ! +1', 'small teal');
+   553→      this.events.push({ type: 'glitch', power: 0.25 });
+   554→    } else {
+   555→      this.scoreF += 250;
+   556→      this.announce('PANSEMENT GASPILLÉ ! +250', 'small');
+   557→    }
+   558→  }
+   559→
+   560→  _triggerSuper() {
+   561→    this.superActive = true;
+   562→    this.superTimer = SUPER_DURATION;
+   563→    this.potassium = 0;
+   564→    this.sound.sfxSuper();
+   565→    this.sound.setIntensity('super');
+   566→    this.announce('SUPER YELLOW MODE!', 'big');
+   567→    this.events.push({ type: 'slowmo', scale: 0.45, dur: 0.25 });
+   568→  }
+   569→
+   570→  _endSuper() {
+   571→    this.superActive = false;
+   572→    this.sound.setIntensity('playing');
+   573→    this.announce('super faded...', 'small');
+   574→  }
+   575→
+   576→  /* ================= main update ================= */
+   577→
+   578→  update(dt) {
+   579→    if (this.state === State.PLAYING) {
+   580→      this.time += dt;
+   581→      this._updateRun(dt);
+   582→    }
+   583→    this._updateHud();
+   584→  }
+   585→
+   586→  _updateRun(dt) {
+   587→    const player = this.player;
+   588→
+   589→    this.distance += player.speed * dt;
+   590→    this.topSpeed = Math.max(this.topSpeed, player.speed);
+   591→
+   592→    // ---- aggressive difficulty curve (full pressure ~1200 m) ----
+   593→    this.difficulty = 1 - Math.exp(-this.distance / 380);
+   594→
+   595→    // ---- ZONES: every 400 m the cosmos changes face ----
+   596→    const zi = Math.floor(this.distance / ZONE_LEN);
+   597→    if (zi !== this.zone) {
+   598→      this.zone = zi;
+   599→      const def = ZONES[zi % ZONES.length];
+   600→      const label = def.name + (ROMAN[Math.min(ROMAN.length - 1, Math.floor(zi / ZONES.length))] || '');
+   601→      this.environment.setZone(zi % ZONES.length);
+   602→      this.sound.sfxZone();
+   603→      this.announce(`ZONE: ${label}`, 'big');
+   604→      this.events.push({ type: 'zoneflash' });
+   605→    }
+   606→
+   607→    // ---- turbo boost ----
+   608→    const wantBoost = player.input.boost && this.boostMeter > 0.04;
+   609→    if (wantBoost && !this._wasBoosting) this.sound.sfxBoost();
+   610→    this._wasBoosting = wantBoost;
+   611→    this.boostActive = wantBoost;
+   612→    if (wantBoost) this.boostMeter = Math.max(0, this.boostMeter - BOOST_DRAIN * dt);
+   613→    else this.boostMeter = Math.min(1, this.boostMeter + BOOST_REGEN * dt);
+   614→    this.boostFactor += ((this.boostActive || this.superActive ? 1 : 0) - this.boostFactor) * Math.min(1, dt * 5);
+   615→
+   616→    // ---- super yellow mode ----
+   617→    // (no glow trail anymore: the mode reads through the banana's tint,
+   618→    // pulse and the sound — nothing additive follows the player)
+   619→    if (this.superActive) {
+   620→      this.superTimer -= dt;
+   621→      if (this.superTimer <= 0) this._endSuper();
+   622→    }
+   623→
+   624→    // ---- slip state ----
+   625→    this.slipping = player.slipUntil > player.time;
+   626→
+   627→    // ---- speed target: fast base, zones stack, hard cap for playability ----
+   628→    const zoneBonus = 1 + Math.min(0.3, this.zone * 0.05);
+   629→    const pad = this.padActive ? 1.22 : 1;
+   630→    this.targetSpeed = Math.min(
+   631→      85,
+   632→      (18 + 44 * this.difficulty) * zoneBonus * pad
+   633→        * (this.boostActive ? 1.9 : 1) * (this.superActive ? 1.28 : 1)
+   634→    );
+   635→
+   636→    // ---- score ----
+   637→    const mult = (this.boostActive ? 2 : 1) * (this.superActive ? 3 : 1) * (this.padActive ? 1.5 : 1);
+   638→    this.scoreF += player.speed * dt * 12 * mult;
+   639→    this.score = Math.floor(this.scoreF);
+   640→
+   641→    // ---- combo decay + COMBO BANK payout ----
+   642→    if (this.comboTimer > 0) {
+   643→      this.comboTimer -= dt;
+   644→      if (this.comboTimer <= 0) {
+   645→        if (this.combo >= 6) {
+   646→          const bank = this.combo * 15;
+   647→          this.scoreF += bank;
+   648→          this.announce(`COMBO BANKÉE ! +${bank}`, 'small teal');
+   649→        }
+   650→        this.combo = 0;
+   651→      }
+   652→    }
+   653→
+   654→    // ---- ARCADE BOSSES: SINGE SUPREME & ROI KONG COSMIQUE ----
+   655→    if (this.bosses) {
+   656→      if (!this.bosses.boss && this.distance >= this.nextBossAt) {
+   657→        this.bossN += 1;
+   658→        const kind = this.bossN % 3 === 0 ? 'mega' : 'mini';
+   659→        this.bosses.spawn(kind, player.position.z);
+   660→        this.sound.sfxBoss(kind === 'mega');
+   661→        this.sound.setIntensity('super'); // boss music!
+   662→        this.announce(kind === 'mega'
+   663→          ? '!! BOSS: ROI KONG COSMIQUE !!'
+   664→          : '!! MINI-BOSS: SINGE SUPREME !!', 'boss');
+   665→        this.events.push({ type: 'glitch', power: 1 });
+   666→        this.events.push({ type: 'shake', power: 0.5 });
+   667→        this.events.push({ type: 'slowmo', scale: 0.55, dur: 0.3 });
+   668→      }
+   669→      if (this.bosses.boss) {
+   670→        this.bosses.update(dt, {
+   671→          active: true,
+   672→          playerPos: player.position,
+   673→          playerSpeed: player.speed,
+   674→          time: this.time,
+   675→          particles: this.particles,
+   676→          onTaunt: (t) => this.announce(t, 'danger small'),
+   677→          onCoconutHit: () => this.onCoconutHit(),
+   678→          onBarrelHit: () => this.onBarrelHit(),
+   679→          onWaveHit: () => this.onWaveHit(),
+   680→          onPound: () => {
+   681→            this.sound.sfxDiveLand();
+   682→            this.events.push({ type: 'shake', power: 0.45 });
+   683→          },
+   684→          onFlee: (kind) => this.onBossFlee(kind),
+   685→        });
+   686→      }
+   687→    }
+   688→
+   689→    // ---- existential void check ----
+   690→    if (player.position.y < -3.4) {
+   691→      this.sound.sfxVoidFall();
+   692→      this.particles.voidBurst(player.position.x, -2, player.position.z);
+   693→      if (this.peel > 1) {
+   694→        const safeZ = this.environment.findSafeZ(player.position.z);
+   695→        player.respawn(0, 2.4, safeZ);
+   696→        player.setInvuln(1.6);
+   697→        this.peel -= 1;
+   698→        player.ejectPeel();
+   699→        this.announce('THE VOID CLAIMS A PEEL', 'danger');
+   700→        this.events.push({ type: 'shake', power: 0.6 });
+   701→      } else {
+   702→        this.peel = 0;
+   703→        this.gameOver('void');
+   704→      }
+   705→    }
+   706→  }
+   707→
+   708→  /* ================= HUD & announcements ================= */
+   709→
+   710→  _zoneLabel() {
+   711→    const zi = this.zone;
+   712→    const def = ZONES[zi % ZONES.length];
+   713→    return def.name + (ROMAN[Math.min(ROMAN.length - 1, Math.floor(zi / ZONES.length))] || '');
+   714→  }
+   715→
+   716→  _updateHud() {
+   717→    const d = this._dom;
+   718→    const h = this._lastHud;
+   719→    if (this.state !== State.PLAYING && this.state !== State.PAUSED) return;
+   720→
+   721→    if (this.score !== h.score) { d.score.textContent = this.score.toLocaleString(); h.score = this.score; }
+   722→    const dist = Math.floor(this.distance);
+   723→    if (dist !== h.dist) { d.dist.textContent = `${dist} m`; h.dist = dist; }
+   724→    const spd = Math.round(this.player.speed * 4);
+   725→    if (spd !== h.speed) { d.speed.textContent = spd; h.speed = spd; }
+   726→
+   727→    if (this.zone !== h.zone && d.zone) {
+   728→      d.zone.textContent = this._zoneLabel();
+   729→      d.zone.classList.remove('hidden');
+   730→      h.zone = this.zone;
+   731→    }
+   732→
+   733→    if (this.peel !== h.peel) {
+   734→      d.peelIcons.forEach((icon, i) => icon.classList.toggle('lost', i >= this.peel));
+   735→      h.peel = this.peel;
+   736→    }
+   737→    if (this.missileAmmo !== h.msl && d.missileIcons.length) {
+   738→      d.missileIcons.forEach((icon, i) => icon.classList.toggle('empty', i >= this.missileAmmo));
+   739→      h.msl = this.missileAmmo;
+   740→    }
+   741→    // ENDURANCE — the jump governor, always on screen so a denied jump is
+   742→    // never a mystery: the bar says exactly how much bounce is left.
+   743→    const e = Math.round(this.player.endurance * 100);
+   744→    if (e !== h.end) {
+   745→      if (d.eFill) {
+   746→        d.eFill.style.width = `${e}%`;
+   747→        d.eFill.classList.toggle('low', this.player.endurance < 0.3);
+   748→      }
+   749→      h.end = e;
+   750→    }
+   751→    const k = Math.round(this.potassium * 100);
+   752→    if (k !== h.k) {
+   753→      d.kFill.style.width = `${k}%`;
+   754→      d.kFill.classList.toggle('full', this.potassium >= 1);
+   755→      h.k = k;
+   756→    }
+   757→    const b = Math.round(this.boostMeter * 100);
+   758→    if (b !== h.boost) { d.boostFill.style.width = `${b}%`; h.boost = b; }
+   759→    const mult = (this.boostActive ? 2 : 1) * (this.superActive ? 3 : 1) * (this.padActive ? 1.5 : 1);
+   760→    const mLabel = mult > 1 ? `x${mult}` : '';
+   761→    if (mLabel !== h.mult) {
+   762→      d.mult.textContent = mLabel;
+   763→      d.mult.classList.toggle('hidden', mLabel === '');
+   764→      h.mult = mLabel;
+   765→    }
+   766→
+   767→    // ---- COMBO chain (tiers + timer bar) ----
+   768→    const tier = this._comboTier();
+   769→    const showCombo = this.combo >= 2;
+   770→    if (showCombo !== h.comboOn || this.combo !== h.comboN || tier.label !== h.comboTier) {
+   771→      h.comboOn = showCombo;
+   772→      h.comboN = this.combo;
+   773→      h.comboTier = tier.label;
+   774→      if (d.comboEl) {
+   775→        d.comboEl.classList.toggle('hidden', !showCombo);
+   776→        d.comboEl.classList.toggle('fever', tier.mult >= 8);
+   777→        if (d.comboCount) d.comboCount.textContent = `x${this.combo}`;
+   778→        if (d.comboTierEl) d.comboTierEl.textContent = tier.label || 'COMBO';
+   779→      }
+   780→    }
+   781→    if (showCombo && d.comboFill) {
+   782→      d.comboFill.style.width = `${Math.round(Math.max(0, Math.min(1, this.comboTimer / COMBO_TIME)) * 100)}%`;
+   783→    }
+   784→  }
+   785→
+   786→  /** Current combo tier (identity-comparable object or the base tier). */
+   787→  _comboTier() {
+   788→    for (const t of COMBO_TIERS) {
+   789→      if (this.combo >= t.at) return t;
+   790→    }
+   791→    return { at: 0, mult: 1, label: null };
+   792→  }
+   793→
+   794→  announce(text, cls = '') {
+   795→    const layer = this._dom.announce;
+   796→    while (layer.children.length > 4) layer.removeChild(layer.firstChild);
+   797→    const el = document.createElement('div');
+   798→    el.className = `announce ${cls}`.trim();
+   799→    el.textContent = text;
+   800→    layer.appendChild(el);
+   801→    setTimeout(() => el.remove(), 2300);
+   802→  }
+   803→
+   804→  _loadBest() {
+   805→    try { return parseInt(localStorage.getItem(BEST_KEY) || '0', 10) || 0; } catch { return 0; }
+   806→  }
+   807→
+   808→  _saveBest() {
+   809→    try { localStorage.setItem(BEST_KEY, String(this.best)); } catch { /* private mode */ }
+   810→  }
+   811→}
+   812→

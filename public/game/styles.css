@@ -1,8 +1,8 @@
 /* ============================================================
-   LIFE IS A BANANA: THE COSMIC SLIP — RETRO KITSCH ARCADE UI
-   Flat arcade-cabinet panels, hard offset shadows, segmented
-   power meters, CRT scanlines. Zero blur-glow: neon lives in
-   the 3D world only (decor bands + boost pads), never in the UI.
+   LIFE IS A BANANA: THE COSMIC SLIP — BANANA STYLE RETRO GLITCH
+   Arcade-cabinet panels, hard offset shadows, segmented power
+   meters, CRT scanlines, RGB-split glitch titles. Zero blur-glow:
+   neon lives ONLY on the 3D road edges, never in the UI.
    ============================================================ */
 
 :root {
@@ -45,9 +45,17 @@ html, body {
   background: radial-gradient(ellipse at center, transparent 55%, rgba(10, 4, 26, 0.55) 100%);
 }
 #scanlines {
-  position: fixed; inset: 0; z-index: 2; pointer-events: none; opacity: 0.09;
+  position: fixed; inset: 0; z-index: 2; pointer-events: none; opacity: 0.13;
   background: repeating-linear-gradient(0deg, #000 0px, #000 1px, transparent 1px, transparent 3px);
 }
+/* VHS tracking tear: a thin bright-line band slowly crawling down —
+   it is a dark/grey band, not light: pure corruption, no glow */
+#scanlines::after {
+  content: ''; position: absolute; left: 0; right: 0; height: 90px;
+  background: linear-gradient(180deg, transparent, rgba(10, 4, 26, 0.16) 45%, rgba(255, 46, 146, 0.05) 50%, rgba(10, 4, 26, 0.16) 55%, transparent);
+  animation: vhs-crawl 9s linear infinite;
+}
+@keyframes vhs-crawl { 0% { top: -12%; } 100% { top: 112%; } }
 
 /* ---------- full-screen juice flashes (damage / zone change) ---------- */
 #flash-overlay { position: fixed; inset: 0; z-index: 35; pointer-events: none; opacity: 0; }
@@ -114,6 +122,15 @@ html, body {
   font-size: clamp(22px, 5vw, 40px);
   line-height: 1.35; color: #fff;
   text-shadow: 0 4px 0 #7A1E58, 4px 4px 0 rgba(0, 0, 0, 0.45);
+  animation: title-glitch 3.7s steps(1) infinite;
+}
+/* RGB-split glitch: hard channel offsets + skew, arcade CRT style */
+@keyframes title-glitch {
+  0%, 86%, 100% { text-shadow: 0 4px 0 #7A1E58, 4px 4px 0 rgba(0, 0, 0, 0.45); transform: none; }
+  87% { text-shadow: -4px 0 var(--magenta), 4px 0 var(--teal), 0 4px 0 #7A1E58; transform: skewX(-5deg); }
+  89% { text-shadow: 4px 0 var(--magenta), -4px 0 var(--teal), 0 4px 0 #7A1E58; transform: skewX(4deg); }
+  91% { text-shadow: -2px 0 var(--teal), 2px 0 var(--magenta), 0 4px 0 #7A1E58; transform: none; }
+  93% { text-shadow: 0 4px 0 #7A1E58, 4px 4px 0 rgba(0, 0, 0, 0.45); transform: skewX(2deg); }
 }
 .game-title span { color: var(--banana); text-shadow: 0 4px 0 #8A6A00, 4px 4px 0 rgba(0, 0, 0, 0.45); }
 .game-subtitle { font-family: var(--font-arcade); font-size: clamp(10px, 2vw, 14px); color: var(--teal); letter-spacing: 6px; text-shadow: 2px 2px 0 #02402c; }
@@ -277,6 +294,57 @@ kbd {
 .icon-btn:hover { color: var(--banana); border-color: rgba(255, 225, 53, 0.5); }
 .icon-btn.muted { color: rgba(244, 237, 255, 0.35); }
 
+/* ---------- COMBO chain (tiers + decay timer) ---------- */
+.hud-combo {
+  margin-top: 7px; display: flex; flex-direction: column; align-items: center; gap: 3px;
+}
+.combo-count {
+  font-family: var(--font-arcade); font-size: 16px; color: var(--magenta);
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.7); line-height: 1;
+}
+.combo-tier {
+  font-family: var(--font-arcade); font-size: 7px; letter-spacing: 1px;
+  color: var(--teal); text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.7); white-space: nowrap;
+}
+.hud-combo.fever .combo-count {
+  color: var(--banana);
+  animation: best-blink 0.5s steps(2) infinite;
+}
+.hud-combo.fever .combo-tier { color: var(--gold); }
+.combo-timer {
+  width: 88px; height: 5px; margin-top: 1px;
+  border: 1px solid rgba(255, 110, 199, 0.4); background: rgba(0, 0, 0, 0.5);
+  border-radius: 2px; overflow: hidden;
+}
+#combo-fill { height: 100%; width: 0%; background: var(--pink); }
+
+/* ---------- BOSS health bar ---------- */
+#boss-bar {
+  position: fixed; top: 104px; left: 50%; transform: translateX(-50%);
+  z-index: 22; width: min(430px, 74vw); padding: 8px 12px 10px;
+  pointer-events: none;
+}
+#boss-bar .boss-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; gap: 10px; }
+.boss-name {
+  font-family: var(--font-arcade); font-size: 10px; color: #ff5c5c; letter-spacing: 1px;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.7);
+  animation: best-blink 0.9s steps(2) infinite; white-space: nowrap;
+}
+.boss-timer { font-family: var(--font-arcade); font-size: 9px; color: var(--gold); }
+.boss-hp {
+  height: 14px; position: relative; overflow: hidden;
+  border: 2px solid rgba(255, 92, 92, 0.5); background: rgba(0, 0, 0, 0.55); border-radius: 4px;
+}
+.boss-hp::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(90deg, transparent 0 13px, rgba(13, 7, 34, 0.75) 13px 15px);
+}
+#boss-hp-fill {
+  height: 100%; width: 100%;
+  background: linear-gradient(180deg, #ff7a7a, #ff2255 60%, #b3002e);
+  transition: width 0.18s ease;
+}
+
 /* ---------- announcements ---------- */
 #announce-layer {
   position: fixed; top: 21%; left: 0; right: 0; z-index: 30;
@@ -288,6 +356,11 @@ kbd {
   color: var(--banana); text-shadow: 3px 3px 0 rgba(0,0,0,0.7);
   animation: announce-pop 1.6s cubic-bezier(0.2, 0.9, 0.3, 1.2) forwards;
   letter-spacing: 1px;
+}
+.announce.boss {
+  color: #ff5c5c; font-size: clamp(15px, 3vw, 24px);
+  text-shadow: 3px 3px 0 rgba(0, 0, 0, 0.8);
+  animation: announce-pop 1.6s cubic-bezier(0.2, 0.9, 0.3, 1.2) forwards, best-blink 0.5s steps(2) infinite;
 }
 .announce.danger { color: var(--magenta); text-shadow: 3px 3px 0 rgba(0,0,0,0.7); }
 .announce.teal { color: var(--teal); text-shadow: 3px 3px 0 rgba(0,0,0,0.7); }
@@ -348,6 +421,9 @@ body.touch .hud-buttons { bottom: calc(200px + env(safe-area-inset-bottom)); }
   .meter-row { gap: 6px; }
   .meter { height: 10px; }
   .hud-speed { font-size: 15px; }
+  .combo-count { font-size: 12px; }
+  .combo-timer { width: 64px; }
+  #boss-bar { top: 88px; }
   .go-stats { grid-template-columns: 1fr 1fr; gap: 8px 16px; }
   .go-value { font-size: 20px; }
   .controls-grid { gap: 5px; }

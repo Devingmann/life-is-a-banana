@@ -120,7 +120,7 @@ export class Player {
   _makeShellMaterial() {
     return new THREE.MeshStandardMaterial({
       color: 0xffe135, transparent: true, opacity: 0.5,
-      emissive: 0xcaa500, emissiveIntensity: 0.22,
+      emissive: 0x2a1e06, emissiveIntensity: 0.05,
       roughness: 0.45, depthWrite: false,
     });
   }
@@ -218,8 +218,11 @@ export class Player {
         } else {
           this._denyJump(ctx);
         }
-      } else if (!coyote) {
-        // HELI-PEEL: mid-air spin jump — as many as endurance can pay for
+      } else {
+        // HELI-PEEL: mid-air spin jump — as many as endurance can pay for.
+        // This branch also catches the rare "grounded but still rising"
+        // frame (a bounce already in flight): a press is NEVER silently
+        // eaten — it converts to an air jump the moment the meter can pay.
         if (this.endurance >= ENDURANCE_COST_AIR) {
           v.y = Math.max(v.y, DOUBLE_JUMP_VELOCITY);
           this.endurance -= ENDURANCE_COST_AIR;
@@ -329,18 +332,17 @@ export class Player {
     const sq = this.squash;
     this.modelGroup.scale.set(1 / Math.sqrt(sq), sq, 1 / Math.sqrt(sq));
 
-    // ---------- super yellow mode (NO glow) ----------
+    // ---------- super yellow mode (essentially NO glow) ----------
     // Super mode reads through the scale pulse, the spin and the sound.
-    // The emissive stays tiny (≈0.27 max) — far below the bloom threshold —
-    // so it can never feed the glow or wash the screen, mid star-streak or
-    // not.
+    // The emissive stays tiny (≈0.13 max luminance) — far below the bloom
+    // threshold — so it can never feed the glow, mid star-streak or not.
     this.superT += ((ctx.superMode ? 1 : 0) - this.superT) * Math.min(1, dt * 4);
     const pulse = 0.5 + 0.5 * Math.sin(this.time * 11);
     for (const m of this.materials) {
       if (!m.emissive) continue;
       if (this.superT > 0.01) {
-        m.emissive.setRGB(0.30 * this.superT, 0.22 * this.superT, 0.05 * this.superT);
-        m.emissiveIntensity = 0.9;
+        m.emissive.setRGB(0.26 * this.superT, 0.19 * this.superT, 0.04 * this.superT);
+        m.emissiveIntensity = 0.5;
       } else {
         m.emissive.setHex(0x2a1e06);
         m.emissiveIntensity = 0.35;
@@ -375,6 +377,27 @@ export class Player {
         this.flyingPeels.splice(i, 1);
       }
     }
+  }
+
+  /** Re-attach torn peel layers (PEEL PATCH pickup / boss MEGA BONUS).
+   *  Mirrors ejectPeel(): shells come back in the order they were torn,
+   *  so the visual layering stays canonical. Returns how many were added. */
+  restorePeel(n = 1) {
+    if (!this.bodyMesh) return 0;
+    const restoreOrder = [1.06, 1.11, 1.16]; // the order they get torn off
+    let restored = 0;
+    for (let i = 0; i < n && this.shells.length < 3; i++) {
+      const scale = restoreOrder[Math.max(0, 2 - this.shells.length)];
+      const shell = this.bodyMesh.clone();
+      shell.material = this._makeShellMaterial();
+      shell.scale.multiplyScalar(scale);
+      shell.castShadow = false;
+      shell.userData.shellIndex = this.shells.length;
+      this.shells.push(shell);
+      this.modelGroup.add(shell);
+      restored += 1;
+    }
+    return restored;
   }
 
   /** Teleport after a void fall. */

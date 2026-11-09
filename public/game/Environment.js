@@ -6,20 +6,26 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
  * Environment
  * -----------
  * Procedural chunk manager for the infinite "Highway of Life".
+ * GLOW POLICY — glow is allowed on EXACTLY ONE thing in this world: the
+ * neon strips on the EDGES OF THE ROAD (matEdge, emissiveIntensity 3).
+ * Every other material is flat matte paint: warning strips, palms, moons,
+ * arches, obstacles, boost pads, pickups — zero emissive, forever. The
+ * RETRO GLITCH look comes from flat saturated paint + chunky shapes.
  *  - Recycled 50-unit road chunks with neon edges, void gaps & warning strips
  *  - Obstacles: Monkeys (some PATROL across the road), Gorilla Bosses,
  *    Electric Toasters (that LAUNCH hot toast barrages at high difficulty),
- *    the Giant Blender of Fate and the Great Juicer — spinning neon arms
+ *    the Giant Blender of Fate and the Great Juicer — spinning arms
  *    you must jump over. All merged single-draw-call meshes + cannon hitboxes
  *  - Potassium stars (distance-collected + magnetized in Super Yellow Mode)
  *    with arc / sine-weave / zigzag / double-arc patterns
  *  - RARE golden bananas: +500 jackpot pickups
+ *  - PEEL PATCH first-aid kits: repair a torn peel layer (fun bonus)
  *  - Banana-peel slip traps (thin physics triggers → chaotic friction loss)
  *  - Speed pads: teal chevron strips → ZOOM! speed bursts
- *  - Zones: every 400 m the palette shifts (neon edges, palm fronds, sun,
+ *  - Zones: every 400 m the palette shifts (neon edges, palm accents, sun,
  *    grid, fog) — synced with GameLogic announcements
  *  - Neon joke billboards ("LA VIE EST UNE BANANE", "OBEY THE MOON"...)
- *  - Cyber-tropical scenery: neon palms, floating banana moons, neon arches,
+ *  - Cyber-tropical scenery: palms, floating banana moons, painted arches,
  *    synthwave grid floor, striped sun, starfield
  */
 
@@ -114,7 +120,7 @@ export class Environment {
     for (let i = 0; i < CHUNK_COUNT; i++) {
       const chunk = {
         group: new THREE.Group(), zEnd: 0, allBodies: [], obstacles: [], stars: [],
-        goldens: [], anims: [], gapSpan: null, disposables: [],
+        goldens: [], patches: [], anims: [], gapSpan: null, disposables: [],
       };
       this.group.add(chunk.group);
       this.chunks.push(chunk);
@@ -131,9 +137,12 @@ export class Environment {
     // --- road ---
     this.roadTex = this._makeRoadTexture();
     this.matRoad = new THREE.MeshStandardMaterial({ map: this.roadTex, roughness: 0.85, metalness: 0.15 });
-    this.matEdge = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 0.75, roughness: 0.4 });
+    this.matEdge = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 3.0, roughness: 0.4 });
     this.geoEdge = new THREE.BoxGeometry(1, 1, 1); // scaled per segment
-    this.matWarn = new THREE.MeshStandardMaterial({ color: 0xff6a00, emissive: 0xff4d00, emissiveIntensity: 0.9 });
+    // THE ONLY GLOW IN THE WORLD is the emissive on the road-edge strips
+    // above (3.0 — comfortably over the bloom threshold). Everything below
+    // is flat paint, deliberately below it.
+    this.matWarn = new THREE.MeshStandardMaterial({ color: 0xff6a00, roughness: 0.6 });
     this.geoWarn = new THREE.BoxGeometry(ROAD_W, 0.09, 0.8);
 
     // --- flat colored material for merged meshes ---
@@ -158,7 +167,18 @@ export class Environment {
       });
     }
 
-    // --- neon palm (silhouette + teal fronds + pink rings) ---
+    // --- PEEL PATCH: first-aid banana kit (matte white + red cross) ---
+    const kitBox = new THREE.BoxGeometry(0.74, 0.52, 0.36);
+    const crossA = new THREE.BoxGeometry(0.46, 0.1, 0.38);
+    const crossB = new THREE.BoxGeometry(0.1, 0.46, 0.38);
+    this.geoPatch = mergeGeometries([
+      part(kitBox, 0xffffff),
+      part(crossA, 0xd8002e, [0, 0, 0.01]),
+      part(crossB, 0xd8002e, [0, 0, 0.01]),
+    ], false);
+    this.matPatch = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.35, metalness: 0.05 });
+
+    // --- banana palm (silhouette + dark fronds + candy rings) ---
     this._buildPalm();
 
     // --- obstacles ---
@@ -170,18 +190,18 @@ export class Environment {
 
     // --- slip-zone peel bits ---
     this.geoPeel = new THREE.BoxGeometry(0.55, 0.1, 1.05);
-    this.matPeel = new THREE.MeshStandardMaterial({ color: COL.banana, emissive: 0xcaa500, emissiveIntensity: 0.2, roughness: 0.5 });
+    this.matPeel = new THREE.MeshStandardMaterial({ color: COL.banana, roughness: 0.5 });
 
-    // --- speed pad (turbo chevrons) ---
+    // --- speed pad (turbo chevrons — flat arcade sticker) ---
     this.geoPad = new THREE.PlaneGeometry(2.7, 4.6);
     this.geoPad.rotateX(-Math.PI / 2);
-    this.matPad = new THREE.MeshBasicMaterial({ map: this._makePadTexture(), transparent: true, opacity: 0.9 });
+    this.matPad = new THREE.MeshBasicMaterial({ map: this._makePadTexture(), transparent: true, opacity: 0.95 });
 
     // --- billboards ---
     this._buildBillboards();
 
     // --- banana moons ---
-    this.moonMat = new THREE.MeshStandardMaterial({ color: 0xffdf6b, emissive: 0xffca28, emissiveIntensity: 0.65, roughness: 0.5 });
+    this.moonMat = new THREE.MeshStandardMaterial({ color: 0xffdf6b, roughness: 0.5 });
     this.moonTemplate = bananaTemplate ? bananaTemplate.clone(true) : null;
     if (this.moonTemplate) {
       this.moonTemplate.traverse((o) => {
@@ -189,10 +209,10 @@ export class Environment {
       });
     }
 
-    // --- neon arch ---
+    // --- painted arch (flat retro paint job) ---
     this.geoArch = new THREE.TorusGeometry(8.4, 0.3, 10, 42);
-    this.matArchPink = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 0.75, roughness: 0.4 });
-    this.matArchTeal = new THREE.MeshStandardMaterial({ color: COL.teal, emissive: COL.teal, emissiveIntensity: 0.7, roughness: 0.4 });
+    this.matArchPink = new THREE.MeshStandardMaterial({ color: COL.pink, roughness: 0.4 });
+    this.matArchTeal = new THREE.MeshStandardMaterial({ color: COL.teal, roughness: 0.4 });
 
     // --- grid floor ---
     this.gridTex = this._makeGridTexture();
@@ -272,19 +292,24 @@ export class Environment {
     c.width = 128; c.height = 256;
     const ctx = c.getContext('2d');
     ctx.clearRect(0, 0, 128, 256);
-    // three glowing chevrons pointing forward (canvas "up")
+    // three flat chunky chevrons pointing forward (canvas "up") — bold
+    // dark outline + teal core, arcade sticker style. NO shadowBlur: the
+    // pads are PAINTED, not glowing (glow = road edges only).
     for (let i = 0; i < 3; i++) {
       const y = 210 - i * 68;
-      ctx.strokeStyle = 'rgba(0,255,163,0.95)';
-      ctx.lineWidth = 17;
-      ctx.lineCap = 'round';
-      ctx.shadowColor = 'rgba(0,255,163,0.9)';
-      ctx.shadowBlur = 16;
-      ctx.beginPath();
-      ctx.moveTo(18, y);
-      ctx.lineTo(64, y - 44);
-      ctx.lineTo(110, y);
-      ctx.stroke();
+      const draw = (color, lw) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lw;
+        ctx.lineCap = 'butt';
+        ctx.lineJoin = 'miter';
+        ctx.beginPath();
+        ctx.moveTo(18, y);
+        ctx.lineTo(64, y - 44);
+        ctx.lineTo(110, y);
+        ctx.stroke();
+      };
+      draw('rgba(6,34,26,0.95)', 26);
+      draw('rgba(0,255,163,0.95)', 15);
     }
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
@@ -340,9 +365,11 @@ export class Environment {
     this.geoPalmRings = mergeGeometries(ringParts, false);
     this.geoPalmFronds = mergeGeometries(frondParts, false);
     this.matPalmSil = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
-    this.matPalmRings = new THREE.MeshStandardMaterial({ color: COL.pink, emissive: COL.magenta, emissiveIntensity: 0.9 });
+    // candy-pink rings: flat paint — they carry the zone accent colour as
+    // diffuse only. Zero emissive: glow belongs to the road edges alone.
+    this.matPalmRings = new THREE.MeshStandardMaterial({ color: COL.pink, roughness: 0.45 });
     this.matPalmFronds = new THREE.MeshStandardMaterial({
-      color: 0x0e2b1f, emissive: COL.teal, emissiveIntensity: 0.55, roughness: 0.6, side: THREE.DoubleSide,
+      color: 0x0e2b1f, roughness: 0.6, side: THREE.DoubleSide,
     });
   }
 
@@ -391,17 +418,15 @@ export class Environment {
     ];
     this.geoToaster = mergeGeometries(parts, false);
     this.matToaster = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.25, metalness: 0.85 });
-    // glowing slots
+    // toaster slots (flat red paint)
     const slot = new THREE.BoxGeometry(0.52, 0.1, 0.78);
     this.geoSlots = mergeGeometries([part(slot, 0, [0.3, 1.0, 0]), part(slot, 0, [-0.3, 1.0, 0])], false);
-    this.matSlots = new THREE.MeshStandardMaterial({ color: 0xff3300, emissive: 0xff4400, emissiveIntensity: 0.65 });
+    this.matSlots = new THREE.MeshStandardMaterial({ color: 0xff3300, roughness: 0.5 });
     // pop-up toast
     this.geoToast = new THREE.BoxGeometry(0.46, 0.3, 0.7);
     this.matToast = new THREE.MeshStandardMaterial({ color: 0xd9a066, roughness: 0.9 });
-    // red-hot airborne toast (projectile) — warm, not blinding
-    this.matHotToast = new THREE.MeshStandardMaterial({
-      color: 0xffb35c, emissive: 0xff5500, emissiveIntensity: 0.55, roughness: 0.7,
-    });
+    // airborne toast (projectile) — flat cartoon toast, zero emissive
+    this.matHotToast = new THREE.MeshStandardMaterial({ color: 0xffb35c, roughness: 0.7 });
   }
 
   _buildBlender() {
@@ -429,14 +454,14 @@ export class Environment {
       part(fin, 0, [0, 0.95, 0], [0, Math.PI / 4, 0]),
       part(fin, 0, [0, 0.95, 0], [0, (Math.PI * 3) / 4, 0]),
     ], false);
-    this.matBlades = new THREE.MeshStandardMaterial({ color: 0x4a2a6b, emissive: COL.purple, emissiveIntensity: 0.6, metalness: 0.7, roughness: 0.3 });
+    this.matBlades = new THREE.MeshStandardMaterial({ color: 0x4a2a6b, metalness: 0.7, roughness: 0.3 });
     // smoothie vortex inside
     this.geoSmoothie = new THREE.CylinderGeometry(1.5, 1.25, 2.4, 16);
-    this.matSmoothie = new THREE.MeshStandardMaterial({ color: 0xff2e92, emissive: 0xff2e92, emissiveIntensity: 0.4, transparent: true, opacity: 0.4 });
+    this.matSmoothie = new THREE.MeshStandardMaterial({ color: 0xff2e92, transparent: true, opacity: 0.4 });
   }
 
   _buildJuicer() {
-    // THE GREAT JUICER: a pillar with two spinning neon blade arms at
+    // THE GREAT JUICER: a pillar with two spinning blade arms at
     // jumpable height — time your jump or get juiced.
     const hub = new THREE.CylinderGeometry(0.42, 0.55, 2.7, 12);
     const ring = new THREE.TorusGeometry(0.62, 0.09, 8, 20);
@@ -454,7 +479,7 @@ export class Environment {
       part(armBox, 0, [1.85, 0, 0]),
       part(tip, 0, [3.68, 0, 0]),
     ], false);
-    this.matJuicerArm = new THREE.MeshStandardMaterial({ color: 0xff2255, emissive: 0xff2255, emissiveIntensity: 0.8, roughness: 0.3, metalness: 0.4 });
+    this.matJuicerArm = new THREE.MeshStandardMaterial({ color: 0xff2255, roughness: 0.3, metalness: 0.4 });
   }
 
   _buildBillboards() {
@@ -482,18 +507,22 @@ export class Environment {
     ctx.strokeStyle = 'rgba(0,255,163,0.75)';
     ctx.lineWidth = 3;
     ctx.strokeRect(26, 26, 460, 248);
-    // glowing text lines
+    // retro print text: hard offset drop-shadow (no shadowBlur — a
+    // billboard is printed, not glowing)
     const lines = text.split('\n');
     const fontSize = lines.length >= 3 ? 62 : (lines.length === 2 ? 80 : 92);
     ctx.font = `900 ${fontSize}px Orbitron, "Arial Black", monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#FFE135';
-    ctx.shadowColor = 'rgba(255,225,53,0.85)';
-    ctx.shadowBlur = 22;
     const lh = fontSize * 1.12;
     const startY = 150 - ((lines.length - 1) * lh) / 2;
-    lines.forEach((line, i) => ctx.fillText(line, 256, startY + i * lh));
+    lines.forEach((line, i) => {
+      const y = startY + i * lh;
+      ctx.fillStyle = 'rgba(10,4,26,0.9)';
+      ctx.fillText(line, 256 + 6, y + 6);
+      ctx.fillStyle = '#FFE135';
+      ctx.fillText(line, 256, y);
+    });
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 4;
@@ -524,9 +553,11 @@ export class Environment {
     }
     const sunTex = new THREE.CanvasTexture(c);
     sunTex.colorSpace = THREE.SRGBColorSpace;
+    // FLAT retro sun: normal blending, no additive — a striped decal
+    // sticker on the sky, deliberately below the bloom threshold.
     this.sun = new THREE.Mesh(
       new THREE.PlaneGeometry(120, 120),
-      new THREE.MeshBasicMaterial({ map: sunTex, transparent: true, opacity: 0.88, fog: false, depthWrite: false, blending: THREE.AdditiveBlending })
+      new THREE.MeshBasicMaterial({ map: sunTex, transparent: true, opacity: 0.92, fog: false, depthWrite: false })
     );
     this.sun.renderOrder = -10;
     this.scene.add(this.sun);
@@ -535,7 +566,7 @@ export class Environment {
     const N = 700;
     const pos = new Float32Array(N * 3);
     const col = new Float32Array(N * 3);
-    const palette = [new THREE.Color(0xffffff), new THREE.Color(0xffd6f0), new THREE.Color(0xb6fff0), new THREE.Color(0xfff3b0)];
+    const palette = [new THREE.Color(0xbfc3d6), new THREE.Color(0xd9a8c8), new THREE.Color(0x92cdbf), new THREE.Color(0xc8c2a0)];
     for (let i = 0; i < N; i++) {
       const a = Math.random() * Math.PI * 2;
       const el = Math.asin(Math.random() * 0.95); // upper hemisphere bias
@@ -550,7 +581,7 @@ export class Environment {
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
     this.starfield = new THREE.Points(g, new THREE.PointsMaterial({
-      size: 1.8, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.7, fog: false, depthWrite: false,
+      size: 1.8, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.55, fog: false, depthWrite: false,
     }));
     this.starfield.renderOrder = -11;
     this.scene.add(this.starfield);
@@ -572,7 +603,7 @@ export class Environment {
     if (instant) {
       this.matEdge.color.copy(this._tEdge);
       this.matEdge.emissive.copy(this._tEdge);
-      this.matPalmFronds.emissive.copy(this._tFrond);
+      this.matPalmRings.color.copy(this._tFrond);
       this.sun.material.color.copy(this._tSun);
       this.matGrid.color.copy(this._tGrid);
       this.fogColor.copy(this._tFog);
@@ -583,7 +614,7 @@ export class Environment {
     const k = Math.min(1, dt * 2.2);
     this.matEdge.color.lerp(this._tEdge, k);
     this.matEdge.emissive.lerp(this._tEdge, k);
-    this.matPalmFronds.emissive.lerp(this._tFrond, k);
+    this.matPalmRings.color.lerp(this._tFrond, k);
     this.sun.material.color.lerp(this._tSun, k);
     this.matGrid.color.lerp(this._tGrid, k);
     this.fogColor.lerp(this._tFog, k);
@@ -619,6 +650,7 @@ export class Environment {
     chunk.obstacles.length = 0;
     chunk.stars.length = 0;
     chunk.goldens.length = 0;
+    chunk.patches.length = 0;
     chunk.anims.length = 0;
     for (const d of chunk.disposables) d.dispose();
     chunk.disposables.length = 0;
@@ -766,6 +798,9 @@ export class Environment {
     // ---- rare golden banana jackpot ----
     if (rng() < 0.16 + D * 0.08) this._addGolden(chunk, rng, gapLocal);
 
+    // ---- PEEL PATCH first-aid kit (fun bonus: repairs a torn peel) ----
+    if (rng() < 0.13) this._addPatch(chunk, rng, gapLocal);
+
     // ---- scenery ----
     this._addScenery(chunk, rng);
   }
@@ -877,12 +912,11 @@ export class Environment {
         const h = 0.85 + Math.pow(pop, 3) * 0.75;
         toasts[0].position.y = h;
         toasts[1].position.y = 0.85 + Math.pow(Math.max(0, Math.sin(t * 1.7 + phase + 0.7)), 3) * 0.75;
-        slots.material.emissiveIntensity = 0.65 + Math.pow(pop, 4) * 0.45;
       });
       hitC = { y: 0.6, r: 1.5 };
       body = this.physics.addStaticBox({ x: 0.75, y: 0.55, z: 0.62 }, { x, y: 0.55, z: zEnd + lz }, { userData: { type } });
     } else if (type === 'juicer') {
-      // THE GREAT JUICER — spinning neon arms you must JUMP over
+      // THE GREAT JUICER — spinning arms you must JUMP over
       mesh = new THREE.Group();
       const hub = new THREE.Mesh(this.geoJuicerHub, this.matJuicerHub);
       hub.castShadow = true;
@@ -1022,6 +1056,26 @@ export class Environment {
       mesh.rotation.y += 3.2 * dt;
       mesh.position.y = golden.baseY + Math.sin(t * 2.0 + phase) * 0.34;
       golden.wy = mesh.position.y;
+    });
+  }
+
+  _addPatch(chunk, rng, gapLocal) {
+    const z = -(8 + rng() * (CHUNK_LEN - 16));
+    if (this._inGap(gapLocal, z, 3)) return;
+    const x = (rng() - 0.5) * 6.5;
+    const mesh = new THREE.Mesh(this.geoPatch, this.matPatch);
+    mesh.castShadow = false;
+    const baseY = 1.25;
+    mesh.position.set(x, baseY, z);
+    chunk.group.add(mesh);
+    const phase = rng() * 9;
+    const patch = { mesh, wx: x, wy: baseY, wz: chunk.zEnd + z, baseY, phase, collected: false };
+    chunk.patches.push(patch);
+    chunk.anims.push((t, dt) => {
+      if (patch.collected) return;
+      mesh.rotation.y += 1.8 * dt;
+      mesh.position.y = patch.baseY + Math.sin(t * 2.2 + phase) * 0.2;
+      patch.wy = mesh.position.y;
     });
   }
 
@@ -1228,8 +1282,9 @@ export class Environment {
   /**
    * @param {number} dt
    * @param {{playerPos:THREE.Vector3, camera:THREE.Camera, canCollect:boolean,
-   *          superMode:boolean, onStar:Function, onGolden:Function, onToastHit:Function,
-   *          onNearMiss:Function, nearMissOK:boolean, difficulty:number, time:number}} ctx
+   *          superMode:boolean, onStar:Function, onGolden:Function, onPatch:Function,
+   *          onToastHit:Function, onNearMiss:Function, nearMissOK:boolean,
+   *          difficulty:number, time:number}} ctx
    */
   update(dt, ctx) {
     this.time += dt;
@@ -1283,6 +1338,16 @@ export class Environment {
           g.collected = true;
           g.mesh.visible = false;
           if (ctx.onGolden) ctx.onGolden(g);
+        }
+      }
+      // PEEL PATCH first-aid kits
+      for (const p of chunk.patches) {
+        if (p.collected) continue;
+        const dx = p.wx - px, dy = p.wy - py, dz = p.wz - pz;
+        if (dx * dx + dy * dy + dz * dz < 3.2) {
+          p.collected = true;
+          p.mesh.visible = false;
+          if (ctx.onPatch) ctx.onPatch(p);
         }
       }
     }
