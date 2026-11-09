@@ -57,6 +57,7 @@ export class GameLogic {
       speed: document.getElementById('hud-speed'),
       mult: document.getElementById('hud-mult'),
       zone: document.getElementById('hud-zone'),
+      eFill: document.getElementById('e-fill'),
       kFill: document.getElementById('k-fill'),
       boostFill: document.getElementById('boost-fill'),
       peelIcons: Array.from(document.querySelectorAll('#peel-icons .peel-icon')),
@@ -77,7 +78,7 @@ export class GameLogic {
       paused: document.getElementById('paused'),
       announce: document.getElementById('announce-layer'),
     };
-    this._lastHud = { score: -1, dist: -1, speed: -1, peel: -1, k: -1, boost: -1, mult: '', zone: -1, msl: -1 };
+    this._lastHud = { score: -1, dist: -1, speed: -1, peel: -1, k: -1, boost: -1, end: -1, mult: '', zone: -1, msl: -1 };
   }
 
   _resetRun() {
@@ -159,7 +160,7 @@ export class GameLogic {
     this._dom.gameover.classList.add('hidden');
     this._dom.paused.classList.add('hidden');
     this._dom.hud.classList.remove('hidden');
-    this._lastHud = { score: -1, dist: -1, speed: -1, peel: -1, k: -1, boost: -1, mult: '', zone: -1, msl: -1 };
+    this._lastHud = { score: -1, dist: -1, speed: -1, peel: -1, k: -1, boost: -1, end: -1, mult: '', zone: -1, msl: -1 };
   }
 
   togglePause() {
@@ -380,11 +381,7 @@ export class GameLogic {
     const speed = 46 + this.player.speed * 0.9;
     this.missiles.fire(p.x, p.y + 0.45, p.z - 1.1, aim, speed);
     this.sound.sfxMissile();
-    // muzzle flash (small on purpose — no whiteout)
-    this.particles.spawn(p.x, p.y + 0.45, p.z - 1.4, {
-      count: 7, spread: 0.3, dir: { x: 0, y: 0.25, z: -1 }, speed: 6, jitter: 3,
-      size: 7, life: 0.28, gravity: 0, drag: 2.2, colors: [0xff6ec7, 0xffd24a, 0xffffff],
-    });
+    // no muzzle flash: missiles are glow-free by design
   }
 
   /** Missile reached an obstacle: KABOOM + smash scoring. */
@@ -468,9 +465,10 @@ export class GameLogic {
     this.boostFactor += ((this.boostActive || this.superActive ? 1 : 0) - this.boostFactor) * Math.min(1, dt * 5);
 
     // ---- super yellow mode ----
+    // (no glow trail anymore: the mode reads through the banana's tint,
+    // pulse and the sound — nothing additive follows the player)
     if (this.superActive) {
       this.superTimer -= dt;
-      this.particles.goldenTrail(player.position.x, player.position.y, player.position.z);
       if (this.superTimer <= 0) this._endSuper();
     }
 
@@ -548,6 +546,16 @@ export class GameLogic {
     if (this.missileAmmo !== h.msl && d.missileIcons.length) {
       d.missileIcons.forEach((icon, i) => icon.classList.toggle('empty', i >= this.missileAmmo));
       h.msl = this.missileAmmo;
+    }
+    // ENDURANCE — the jump governor, always on screen so a denied jump is
+    // never a mystery: the bar says exactly how much bounce is left.
+    const e = Math.round(this.player.endurance * 100);
+    if (e !== h.end) {
+      if (d.eFill) {
+        d.eFill.style.width = `${e}%`;
+        d.eFill.classList.toggle('low', this.player.endurance < 0.3);
+      }
+      h.end = e;
     }
     const k = Math.round(this.potassium * 100);
     if (k !== h.k) {

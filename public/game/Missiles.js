@@ -3,10 +3,13 @@ import * as THREE from 'three';
 /**
  * Missiles — BANANA BALLISTICS
  * ----------------------------
- * Pooled projectile system: glowing spinning bananas launched forward with
- * a subtle auto-aim (computed by Environment.aimAssist), a spark trail, and
- * sphere hit-testing against obstacles (Environment.missileHitTest). On
- * impact the caller (GameLogic) smashes the obstacle for score + KABOOM.
+ * Pooled projectile system: spinning bananas launched forward with a
+ * subtle auto-aim (computed by Environment.aimAssist) and sphere
+ * hit-testing against obstacles (Environment.missileHitTest). On impact
+ * the caller (GameLogic) smashes the obstacle for score + KABOOM.
+ *
+ * ZERO GLOW by design: no emissive, no additive trail, no muzzle flash —
+ * a fat matte-yellow cartoon banana that is visible through size + spin.
  *
  * Kept deliberately cheap: max ~8 live missiles, one shared material,
  * meshes pooled instead of rebuilt.
@@ -14,8 +17,6 @@ import * as THREE from 'three';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const _dir = new THREE.Vector3();
-
-const TRAIL_COLORS = [0xffd24a, 0xff6ec7, 0xfff6c8];
 
 export class Missiles {
   /**
@@ -27,12 +28,13 @@ export class Missiles {
     this.active = [];
     this.pool = [];
 
+    // NO GLOW: pure matte-yellow arcade bullet — no emissive, no additive
+    // anything. Visibility = chunky size + fast spin.
     this.mat = new THREE.MeshStandardMaterial({
       color: 0xffe135,
-      emissive: 0xff9d00,   // warm rocket glow (bloom-safe intensity)
-      emissiveIntensity: 0.9,
-      roughness: 0.3,
-      metalness: 0.45,
+      roughness: 0.42,
+      metalness: 0.1,
+      flatShading: true,
     });
 
     this.template = bananaTemplate ? bananaTemplate.clone(true) : null;
@@ -77,7 +79,7 @@ export class Missiles {
     if (this.active.length >= 8) this._release(0); // recycle oldest, never grow unbounded
     _dir.set(dir ? dir.x : 0, dir ? dir.y : 0.04, dir ? dir.z : -1).normalize();
     const mesh = this._acquire();
-    mesh.scale.setScalar(0.72);
+    mesh.scale.setScalar(0.82);
     mesh.position.set(x, y, z);
     this.active.push({
       mesh,
@@ -93,7 +95,6 @@ export class Missiles {
   /**
    * @param {number} dt
    * @param {{playerZ:number,
-   *          particles:import('./Particles.js').Particles,
    *          testHit:Function,   // (x,y,z) => {body,x,y,z}|null
    *          onHit:Function}}    // (hit) => void
    */
@@ -114,14 +115,6 @@ export class Missiles {
       _dir.set(m.vx, m.vy, m.vz).normalize();
       m.mesh.quaternion.setFromUnitVectors(UP, _dir);
       m.mesh.rotateY(m.angle);
-
-      // spark trail (small + short-lived: must NOT whiteout the screen)
-      if (ctx.particles) {
-        ctx.particles.spawn(m.x, m.y, m.z, {
-          count: 2, spread: 0.1, speed: 0.9, size: 5.5, life: 0.28,
-          gravity: 0, drag: 3.2, colors: TRAIL_COLORS,
-        });
-      }
 
       // ---- obstacle hit test ----
       if (ctx.testHit) {

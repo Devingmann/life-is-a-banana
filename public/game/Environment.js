@@ -140,17 +140,16 @@ export class Environment {
     this.matFlat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75, metalness: 0.1 });
     this.matChrome = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.25, metalness: 0.9 });
 
-    // --- potassium star ---
+    // --- potassium star (retro arcade coin: fat, flat, ZERO glow) ---
     this.geoStar = this._makeStarGeometry();
     this.matStar = new THREE.MeshStandardMaterial({
-      color: COL.gold, emissive: COL.gold, emissiveIntensity: 0.85,
-      roughness: 0.3, metalness: 0.7,
+      color: 0xffcf3f, roughness: 0.42, metalness: 0.25,
+      flatShading: true, // chunky faceted arcade look
     });
 
-    // --- golden banana pickup ---
+    // --- golden banana pickup (pure chrome-gold, NO emissive) ---
     this.matGolden = new THREE.MeshStandardMaterial({
-      color: 0xffd700, emissive: 0xffb700, emissiveIntensity: 1.0,
-      roughness: 0.22, metalness: 0.85,
+      color: 0xffd700, roughness: 0.16, metalness: 0.95,
     });
     this.goldenTemplate = bananaTemplate ? bananaTemplate.clone(true) : null;
     if (this.goldenTemplate) {
@@ -205,6 +204,9 @@ export class Environment {
   }
 
   _makeRoadTexture() {
+    // RETRO KITSCH asphalt: dark purple base, hot-pink grid, chunky yellow
+    // dashes and black & white checkerboard shoulders — a proper outrun
+    // arcade carpet, readable at any speed.
     const c = document.createElement('canvas');
     c.width = 256; c.height = 512;
     const ctx = c.getContext('2d');
@@ -214,17 +216,31 @@ export class Environment {
       ctx.fillStyle = Math.random() < 0.5 ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.3)';
       ctx.fillRect(Math.random() * 256, Math.random() * 512, 2, 2);
     }
+    // pink lane grid
     ctx.strokeStyle = 'rgba(255,46,146,0.22)';
     ctx.lineWidth = 2;
     for (let x = 0; x <= 256; x += 64) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 512); ctx.stroke(); }
     for (let y = 0; y <= 512; y += 64) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(256, y); ctx.stroke(); }
-    ctx.strokeStyle = 'rgba(255,110,199,0.9)';
+    // checkerboard shoulders (the classic kitsch racing-rim carpet)
+    const cell = 16;
+    for (const x0 of [0, 256 - 32]) {
+      for (let y = 0; y < 512; y += cell) {
+        for (let x = 0; x < 32; x += cell) {
+          const odd = ((x / cell) + (y / cell)) % 2 === 0;
+          ctx.fillStyle = odd ? '#e9edff' : '#221643';
+          ctx.fillRect(x0 + x, y, cell, cell);
+        }
+      }
+    }
+    // pink boundary lines between checker and asphalt
+    ctx.strokeStyle = 'rgba(255,110,199,0.95)';
     ctx.lineWidth = 5;
-    ctx.beginPath(); ctx.moveTo(5, 0); ctx.lineTo(5, 512); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(251, 0); ctx.lineTo(251, 512); ctx.stroke();
-    ctx.fillStyle = 'rgba(255,225,53,0.8)';
-    ctx.fillRect(124, 24, 8, 110);
-    ctx.fillRect(124, 276, 8, 110);
+    ctx.beginPath(); ctx.moveTo(35, 0); ctx.lineTo(35, 512); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(221, 0); ctx.lineTo(221, 512); ctx.stroke();
+    // chunky yellow centre dashes
+    ctx.fillStyle = 'rgba(255,225,53,0.85)';
+    ctx.fillRect(124, 24, 9, 110);
+    ctx.fillRect(124, 276, 9, 110);
     const tex = new THREE.CanvasTexture(c);
     tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
     tex.colorSpace = THREE.SRGBColorSpace;
@@ -276,8 +292,9 @@ export class Environment {
   }
 
   _makeStarGeometry() {
+    // chunkier arcade star: fat points, thick body, deep bevel
     const shape = new THREE.Shape();
-    const outer = 0.52, inner = 0.22;
+    const outer = 0.56, inner = 0.235;
     for (let i = 0; i < 10; i++) {
       const r = i % 2 === 0 ? outer : inner;
       const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
@@ -286,7 +303,7 @@ export class Environment {
     }
     shape.closePath();
     const geo = new THREE.ExtrudeGeometry(shape, {
-      depth: 0.2, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.05, bevelSegments: 1,
+      depth: 0.24, bevelEnabled: true, bevelThickness: 0.07, bevelSize: 0.07, bevelSegments: 2,
     });
     geo.center();
     return geo;
@@ -377,13 +394,13 @@ export class Environment {
     // glowing slots
     const slot = new THREE.BoxGeometry(0.52, 0.1, 0.78);
     this.geoSlots = mergeGeometries([part(slot, 0, [0.3, 1.0, 0]), part(slot, 0, [-0.3, 1.0, 0])], false);
-    this.matSlots = new THREE.MeshStandardMaterial({ color: 0xff3300, emissive: 0xff4400, emissiveIntensity: 0.9 });
+    this.matSlots = new THREE.MeshStandardMaterial({ color: 0xff3300, emissive: 0xff4400, emissiveIntensity: 0.65 });
     // pop-up toast
     this.geoToast = new THREE.BoxGeometry(0.46, 0.3, 0.7);
     this.matToast = new THREE.MeshStandardMaterial({ color: 0xd9a066, roughness: 0.9 });
-    // red-hot airborne toast (projectile)
+    // red-hot airborne toast (projectile) — warm, not blinding
     this.matHotToast = new THREE.MeshStandardMaterial({
-      color: 0xffb35c, emissive: 0xff5500, emissiveIntensity: 0.95, roughness: 0.7,
+      color: 0xffb35c, emissive: 0xff5500, emissiveIntensity: 0.55, roughness: 0.7,
     });
   }
 
@@ -412,10 +429,10 @@ export class Environment {
       part(fin, 0, [0, 0.95, 0], [0, Math.PI / 4, 0]),
       part(fin, 0, [0, 0.95, 0], [0, (Math.PI * 3) / 4, 0]),
     ], false);
-    this.matBlades = new THREE.MeshStandardMaterial({ color: 0x4a2a6b, emissive: COL.purple, emissiveIntensity: 0.85, metalness: 0.7, roughness: 0.3 });
-    // glowing smoothie vortex inside
+    this.matBlades = new THREE.MeshStandardMaterial({ color: 0x4a2a6b, emissive: COL.purple, emissiveIntensity: 0.6, metalness: 0.7, roughness: 0.3 });
+    // smoothie vortex inside
     this.geoSmoothie = new THREE.CylinderGeometry(1.5, 1.25, 2.4, 16);
-    this.matSmoothie = new THREE.MeshStandardMaterial({ color: 0xff2e92, emissive: 0xff2e92, emissiveIntensity: 0.6, transparent: true, opacity: 0.4 });
+    this.matSmoothie = new THREE.MeshStandardMaterial({ color: 0xff2e92, emissive: 0xff2e92, emissiveIntensity: 0.4, transparent: true, opacity: 0.4 });
   }
 
   _buildJuicer() {
@@ -437,7 +454,7 @@ export class Environment {
       part(armBox, 0, [1.85, 0, 0]),
       part(tip, 0, [3.68, 0, 0]),
     ], false);
-    this.matJuicerArm = new THREE.MeshStandardMaterial({ color: 0xff2255, emissive: 0xff2255, emissiveIntensity: 1.15, roughness: 0.3, metalness: 0.4 });
+    this.matJuicerArm = new THREE.MeshStandardMaterial({ color: 0xff2255, emissive: 0xff2255, emissiveIntensity: 0.8, roughness: 0.3, metalness: 0.4 });
   }
 
   _buildBillboards() {
@@ -797,6 +814,7 @@ export class Environment {
           mesh.position.y = Math.abs(Math.sin(t * 2.2 + phase)) * 0.22;
           mesh.rotation.z = Math.sin(t * 1.6 + phase) * 0.07;
           body.position.x = mesh.position.x;
+          body.aabbNeedsUpdate = true; // keep raycasts truthful for movers
         });
       } else {
         chunk.anims.push((t) => {
@@ -859,7 +877,7 @@ export class Environment {
         const h = 0.85 + Math.pow(pop, 3) * 0.75;
         toasts[0].position.y = h;
         toasts[1].position.y = 0.85 + Math.pow(Math.max(0, Math.sin(t * 1.7 + phase + 0.7)), 3) * 0.75;
-        slots.material.emissiveIntensity = 0.9 + Math.pow(pop, 4) * 0.7;
+        slots.material.emissiveIntensity = 0.65 + Math.pow(pop, 4) * 0.45;
       });
       hitC = { y: 0.6, r: 1.5 };
       body = this.physics.addStaticBox({ x: 0.75, y: 0.55, z: 0.62 }, { x, y: 0.55, z: zEnd + lz }, { userData: { type } });
@@ -889,6 +907,7 @@ export class Environment {
           const b = bodies[k];
           b.position.set(x + Math.cos(ang) * 1.95, 0.85, zEnd + lz + Math.sin(ang) * 1.95);
           b.quaternion.setFromAxisAngle(_yAxis, -ang);
+          b.aabbNeedsUpdate = true; // keep raycasts truthful for movers
         }
       });
       damage = 1; knock = 9; nmDist = 3.7;

@@ -9,17 +9,28 @@ const DOUBLE_JUMP_VELOCITY = 10.6; // HELI-PEEL: mid-air spin jump
 const LATERAL_BASE = 13.0;
 const LATERAL_PER_DIFF = 9.0;      // steering authority scales with speed
 const COYOTE_TIME = 0.12;
-const JUMP_BUFFER = 0.14;
-const HOLD_JUMP_DELAY = 0.3;       // held space chains the double jump after this
+const JUMP_BUFFER = 0.15;
+
+// ---- ENDURANCE: the one and only jump governor ----
+// Jumps work ALL THE TIME. There is no jump-count state machine left to
+// eat inputs: press = jump, as long as the banana has juice. The meter
+// (HUD "ENDURANCE") drains per jump and refills fast while rolling,
+// slowly while airborne.
+const ENDURANCE_COST_GROUND = 0.24;   // a road bounce is cheap
+const ENDURANCE_COST_AIR = 0.40;      // each HELI-PEEL costs more
+const ENDURANCE_REGEN_GROUND = 0.50;  // full meter back in ~2 s of rolling
+const ENDURANCE_REGEN_AIR = 0.16;
 
 /**
  * Player — the Cosmic Banana
  * --------------------------
  * A physics sphere drives the motion; the banana mesh tumbles, banks and
- * squashes on top of it. Handles steering, jumping (coyote time + input
- * buffer + HELI-PEEL double jump), dive-stomps, slip chaos, peel-layer
- * shells that tear off on damage, the golden glow of Super Yellow Mode and
- * an anti-stuck watchdog that guarantees the run NEVER freezes solid.
+ * squashes on top of it. Handles steering, ENDURANCE-governed jumping
+ * (coyote time + input buffer + HELI-PEEL: as many air jumps as the meter
+ * can pay for — a press is NEVER eaten by hidden state), dive-stomps, slip
+ * chaos, peel-layer shells that tear off on damage, the warm tint of Super
+ * Yellow Mode and an anti-stuck watchdog that guarantees the run NEVER
+ * freezes solid.
  */
 export class Player {
   /**
@@ -85,10 +96,9 @@ export class Player {
     // ---- input & state ----
     this.input = { left: false, right: false, boost: false, down: false, jump: false };
     this.jumpBuffered = 0;
-    this.jumpsUsed = 0;       // 0 = grounded, 1 = ground-jump spent, 2 = double spent
-    this.prevCoyote = false;
+    this.endurance = 1;       // 0..1 — the jump governor (HUD ENDURANCE bar)
+    this.lastDeniedAt = -999; // throttle for the "not enough endurance" feedback
     this.lastGroundedAt = -999;
-    this.lastJumpAt = -999;   // timestamps the last executed jump (hold-chaining)
     this.prevGrounded = false;
     this.prevVy = 0;
     this.invulnUntil = 0;
@@ -116,6 +126,16 @@ export class Player {
   }
 
   queueJump() { this.jumpBuffered = JUMP_BUFFER; }
+
+  /** Jump pressed while the endurance meter is dry: crisp, throttled "pfft"
+   *  feedback so the player ALWAYS understands why nothing happened — the
+   *  key is never silently dead. */
+  _denyJump(ctx) {
+    if (this.time - this.lastDeniedAt < 0.3) return;
+    this.lastDeniedAt = this.time;
+    this.jumpBuffered = 0;
+    if (ctx.onJumpDenied) ctx.onJumpDenied();
+  }
 
   setSlip(duration) { this.slipUntil = Math.max(this.slipUntil, this.time + duration); }
   setInvuln(duration) { this.invulnUntil = Math.max(this.invulnUntil, this.time + duration); }
@@ -170,42 +190,46 @@ export class Player {
     }
 
     // ---------- jump bookkeeping ----------
-    if (coyote) this.jumpsUsed = 0;
-    else if (this.prevCoyote && this.jumpsUsed === 0) this.jumpsUsed = 1; // walked off a ledge: ground jump is spent
-    this.prevCoyote = coyote;
+    // (nothing left to bookkeep: availability is purely ENDURANCE)
 
-    // ---------- jump (buffered + coyote) & HELI-PEEL double jump ----------
+    // ---------- ENDURANCE: refills fast on the road, slowly in the air ----
+    this.endurance = Math.min(1, this.endurance + dt * (coyote ? ENDURANCE_REGEN_GROUND : ENDURANCE_REGEN_AIR));
+
+    // ---------- jump (buffered + coyote) & HELI-PEEL — endurance-gated ----
     this.jumpBuffered = Math.max(0, this.jumpBuffered - dt);
 
-    // HELD jump key = persistent intent. Space must work ALL the time:
-    // while the key stays down the buffer keeps refreshing, so the banana
-    // bounces on EVERY landing, and a deliberate hold (> HOLD_JUMP_DELAY)
-    // chains the HELI-PEEL. Quick taps are untouched.
-    if (ctx.active && this.input.jump) {
-      const sinceJump = this.time - this.lastJumpAt;
-      if (this.jumpsUsed === 0 || sinceJump > HOLD_JUMP_DELAY) {
-        this.jumpBuffered = Math.max(this.jumpBuffered, JUMP_BUFFER);
-      }
+    // HELD jump key = persistent intent WHILE ON THE ROAD: the buffer keeps
+    // refreshing, so the banana auto-bounces on every landing the meter can
+    // pay for. In the air, each HELI-PEEL requires a fresh press — a long
+    // hold can never again silently waste the double jump.
+    if (ctx.active && this.input.jump && coyote) {
+      this.jumpBuffered = Math.max(this.jumpBuffered, JUMP_BUFFER);
     }
 
-    if (this.jumpBuffered > 0) {
-      if (coyote && v.y < 2.5) {
-        v.y = JUMP_VELOCITY;
-        this.jumpBuffered = 0;
-        this.jumpsUsed = 1;
-        this.lastJumpAt = this.time;
-        this.lastGroundedAt = -999; // consume
-        this.squashVel = 6.5;       // stretch pop
-        if (ctx.onJump) ctx.onJump();
-      } else if (!coyote && this.jumpsUsed < 2 && ctx.active) {
-        // HELI-PEEL: mid-air spin jump — the skill ceiling for gap crossings
-        this.jumpBuffered = 0;
-        this.jumpsUsed = 2;
-        this.lastJumpAt = this.time;
-        v.y = Math.max(v.y, DOUBLE_JUMP_VELOCITY);
-        this.spinT = 0.55;
-        this.squashVel = 4.5;
-        if (ctx.onDoubleJump) ctx.onDoubleJump();
+    if (this.jumpBuffered > 0 && ctx.active) {
+      if (coyote && v.y < 3.0) {
+        if (this.endurance >= ENDURANCE_COST_GROUND) {
+          v.y = JUMP_VELOCITY;
+          this.endurance -= ENDURANCE_COST_GROUND;
+          this.jumpBuffered = 0;
+          this.lastGroundedAt = -999; // consume coyote
+          this.squashVel = 6.5;       // stretch pop
+          if (ctx.onJump) ctx.onJump();
+        } else {
+          this._denyJump(ctx);
+        }
+      } else if (!coyote) {
+        // HELI-PEEL: mid-air spin jump — as many as endurance can pay for
+        if (this.endurance >= ENDURANCE_COST_AIR) {
+          v.y = Math.max(v.y, DOUBLE_JUMP_VELOCITY);
+          this.endurance -= ENDURANCE_COST_AIR;
+          this.jumpBuffered = 0;
+          this.spinT = 0.55;
+          this.squashVel = 4.5;
+          if (ctx.onDoubleJump) ctx.onDoubleJump();
+        } else {
+          this._denyJump(ctx);
+        }
       }
     }
 
@@ -305,18 +329,20 @@ export class Player {
     const sq = this.squash;
     this.modelGroup.scale.set(1 / Math.sqrt(sq), sq, 1 / Math.sqrt(sq));
 
-    // ---------- super yellow glow ----------
-    // (tuned down from 1.8 → 1.05 max emissive: the old values + bloom
-    // washed the screen white during star streaks)
+    // ---------- super yellow mode (NO glow) ----------
+    // Super mode reads through the scale pulse, the spin and the sound.
+    // The emissive stays tiny (≈0.27 max) — far below the bloom threshold —
+    // so it can never feed the glow or wash the screen, mid star-streak or
+    // not.
     this.superT += ((ctx.superMode ? 1 : 0) - this.superT) * Math.min(1, dt * 4);
     const pulse = 0.5 + 0.5 * Math.sin(this.time * 11);
     for (const m of this.materials) {
       if (!m.emissive) continue;
       if (this.superT > 0.01) {
-        m.emissive.setRGB(0.72 * this.superT + 0.04 * pulse * this.superT, 0.52 * this.superT, 0.09 * this.superT);
-        m.emissiveIntensity = 0.55 + 0.5 * this.superT;
+        m.emissive.setRGB(0.30 * this.superT, 0.22 * this.superT, 0.05 * this.superT);
+        m.emissiveIntensity = 0.9;
       } else {
-        m.emissive.setHex(0x3a2a05);
+        m.emissive.setHex(0x2a1e06);
         m.emissiveIntensity = 0.35;
       }
     }
@@ -358,6 +384,7 @@ export class Player {
     this.body.angularVelocity.set(0, 0, 0);
     this.stunUntil = 0;
     this.stuckTimer = 0;
+    this.endurance = 1; // fresh legs after a cosmic respawn
   }
 
   /** Full reset (new run). */
@@ -365,10 +392,9 @@ export class Player {
     this.respawn(0, 1.6, 0);
     this.input.left = this.input.right = this.input.boost = this.input.down = this.input.jump = false;
     this.jumpBuffered = 0;
-    this.jumpsUsed = 0;
-    this.prevCoyote = false;
+    this.endurance = 1;
+    this.lastDeniedAt = -999;
     this.lastGroundedAt = -999;
-    this.lastJumpAt = -999;
     this.invulnUntil = 0;
     this.slipUntil = 0;
     this.superT = 0;

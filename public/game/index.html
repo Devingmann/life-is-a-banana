@@ -13,9 +13,9 @@
   <script type="importmap">
   {
     "imports": {
-      "three": "./vendor/three.module.js",
+      "three": "./vendor/three.module.js?v=3",
       "three/addons/": "./vendor/jsm/",
-      "cannon-es": "./vendor/cannon-es.js"
+      "cannon-es": "./vendor/cannon-es.js?v=3"
     }
   }
   </script>
@@ -53,13 +53,13 @@
       <div id="menu-best" class="menu-best">BEST SCORE: 0</div>
       <div class="controls-grid">
         <div class="control-row"><span class="key-group"><kbd>ZQSD</kbd><kbd>WASD</kbd><kbd>&#8592;&#8594;</kbd></span><span class="control-desc">Steer the banana (AZERTY, QWERTY &amp; arrows)</span></div>
-        <div class="control-row"><span class="key-group"><kbd>ESPACE</kbd><kbd>&#8593;</kbd></span><span class="control-desc">Jump the voids</span></div>
-        <div class="control-row"><span class="key-group"><kbd>ESPACE &#215;2</kbd></span><span class="control-desc">Heli-Peel double jump</span></div>
+        <div class="control-row"><span class="key-group"><kbd>ESPACE</kbd><kbd>&#8593;</kbd></span><span class="control-desc">Jump — marche TOUJOURS selon l'endurance</span></div>
+        <div class="control-row"><span class="key-group"><kbd>ESPACE en l'air</kbd></span><span class="control-desc">Heli-Peel — sauts multiples tant qu'il reste de l'endurance</span></div>
         <div class="control-row"><span class="key-group"><kbd>&#8595;</kbd><kbd>S</kbd></span><span class="control-desc">Dive-stomp (speed pop!)</span></div>
         <div class="control-row"><span class="key-group"><kbd>SHIFT</kbd></span><span class="control-desc">Banana Split Turbo</span></div>
         <div class="control-row"><span class="key-group"><kbd>F</kbd><kbd>CLIC</kbd></span><span class="control-desc">Missile banane (étoiles = munitions)</span></div>
         <div class="control-row"><span class="key-group"><kbd>P</kbd></span><span class="control-desc">Pause&nbsp;&middot;&nbsp;<kbd>M</kbd> mute</span></div>
-        <div class="control-tip">Graze obstacles for FRÔLÉ bonuses &middot; teal chevrons = ZOOM &middot; golden bananas = jackpot &middot; 8 stars = 1 missile</div>
+        <div class="control-tip">L'endurance commande les sauts (recharge en roulant) &middot; graze pour FRÔLÉ &middot; chevrons teal = ZOOM &middot; bananes dorées = jackpot &middot; 8 étoiles = 1 missile</div>
       </div>
       <button id="btn-start" class="btn btn-start">START SLIPPING</button>
       <div class="credits">
@@ -119,6 +119,10 @@
         <div id="hud-zone" class="hud-zone hidden">JUNGLE NÉON</div>
       </div>
       <div class="hud-panel glass hud-right">
+        <div class="meter-row">
+          <div class="hud-label">ENDURANCE</div>
+          <div class="meter"><div id="e-fill" class="meter-fill e"></div></div>
+        </div>
         <div class="meter-row">
           <div class="hud-label">POTASSIUM</div>
           <div class="meter"><div id="k-fill" class="meter-fill k"></div></div>
@@ -182,6 +186,6 @@
     </div>
   </div>
 
-  <script type="module" src="./main.js"></script>
+  <script type="module" src="./main.js?v=3"></script>
 </body>
 </html>

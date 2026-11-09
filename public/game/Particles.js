@@ -5,14 +5,13 @@ import * as THREE from 'three';
  * ---------
  * Pooled CPU particle system on THREE.Points with a soft-sprite shader:
  *   - peel debris on impacts (gravity chunks)
- *   - potassium sparkles on collection
- *   - golden trail during Super Yellow Mode
- * Plus a pooled LineSegments "speed lines" field that activates during
- * turbo boost / super mode for anime-style velocity feedback.
+ *   - potassium pops on collection (small, brief, non-white)
+ *   - golden pops on golden-banana jackpots
+ * The old additive "speed lines" velocity field was removed for good:
+ * NO GLOW OF SPEED anywhere — speed reads through FOV, camera and world.
  */
 
 const MAX_PARTICLES = 700;
-const MAX_SPEED_LINES = 26;
 
 const _VERT = /* glsl */ `
   attribute float aSize;
@@ -93,20 +92,6 @@ export class Particles {
     this.points.renderOrder = 5;
     scene.add(this.points);
 
-    // ---- speed lines ----
-    this.linePos = new Float32Array(MAX_SPEED_LINES * 6);
-    this.lineMeta = []; // {x,y,z,len}
-    for (let i = 0; i < MAX_SPEED_LINES; i++) this.lineMeta.push({ x: 0, y: 0, z: 0, len: 6 });
-    const lgeo = new THREE.BufferGeometry();
-    lgeo.setAttribute('position', new THREE.BufferAttribute(this.linePos, 3));
-    this.lineMat = new THREE.LineBasicMaterial({
-      color: 0xffd9f2, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
-    });
-    this.speedLines = new THREE.LineSegments(lgeo, this.lineMat);
-    this.speedLines.frustumCulled = false;
-    scene.add(this.speedLines);
-    this.lineOpacity = 0;
-
     this._rand = Math.random;
   }
 
@@ -152,12 +137,13 @@ export class Particles {
     });
   }
 
-  /** Potassium sparkle on star pickup (small on purpose: additive gold
-   *  particles + bloom used to stack into a full whiteout) */
+  /** Potassium pop on star pickup — tiny and quick on purpose: collectibles
+   *  carry ZERO glow, so the pickup feedback is a brief candy pop, never a
+   *  white additive cloud. */
   starSparkle(x, y, z) {
     this.spawn(x, y, z, {
-      count: 9, spread: 0.4, speed: 4.5, upBias: 0.45, size: 7, life: 0.4,
-      gravity: -2, drag: 2.4, colors: [0xffd24a, 0xfff6c8, 0xffb347],
+      count: 6, spread: 0.35, speed: 4, upBias: 0.45, size: 6, life: 0.3,
+      gravity: -2, drag: 2.6, colors: [0xffd24a, 0xffb347],
     });
   }
 
@@ -169,11 +155,11 @@ export class Particles {
     });
   }
 
-  /** Super-mode golden trail */
+  /** Super-mode warm pop — called rarely (mode start), no persistent trail. */
   goldenTrail(x, y, z) {
     this.spawn(x, y, z, {
-      count: 2, spread: 0.35, speed: 1.2, upBias: 0.3, size: 8, life: 0.45,
-      gravity: -1.5, drag: 2.0, colors: [0xffd24a, 0xfff6c8],
+      count: 6, spread: 0.5, speed: 3, upBias: 0.5, size: 7, life: 0.4,
+      gravity: -1.5, drag: 2.4, colors: [0xffd24a, 0xffb347],
     });
   }
 
@@ -227,21 +213,12 @@ export class Particles {
     });
   }
 
-  resetSpeedLines(playerZ) {
-    for (let i = 0; i < MAX_SPEED_LINES; i++) {
-      const m = this.lineMeta[i];
-      m.x = (Math.random() - 0.5) * 16;
-      m.y = 0.6 + Math.random() * 7.5;
-      m.z = playerZ - 15 - Math.random() * 45;
-      m.len = 4 + Math.random() * 6;
-    }
-  }
+  resetSpeedLines(playerZ) { /* removed: NO speed glow — kept as no-op for API compat */ }
 
   /**
    * @param {number} dt
-   * @param {{playerZ:number, speed:number, boostFactor:number}} ctx
    */
-  update(dt, ctx) {
+  update(dt) {
     // --- points integration ---
     const { pos, vel, life, maxLife, alpha, grav, drag } = this;
     for (let i = 0; i < MAX_PARTICLES; i++) {
@@ -263,27 +240,5 @@ export class Particles {
     g.attributes.aAlpha.needsUpdate = true;
     g.attributes.aColor.needsUpdate = true;
     g.attributes.aSize.needsUpdate = true;
-
-    // --- speed lines ---
-    const targetOpacity = ctx.boostFactor * 0.55;
-    this.lineOpacity += (targetOpacity - this.lineOpacity) * Math.min(1, dt * 6);
-    this.lineMat.opacity = this.lineOpacity;
-    if (this.lineOpacity > 0.02) {
-      const relSpeed = ctx.speed * 2.2 + 30;
-      for (let i = 0; i < MAX_SPEED_LINES; i++) {
-        const m = this.lineMeta[i];
-        m.z += relSpeed * dt;
-        if (m.z > ctx.playerZ + 14) {
-          m.x = (Math.random() - 0.5) * 16;
-          m.y = 0.6 + Math.random() * 7.5;
-          m.z = ctx.playerZ - 60 - Math.random() * 20;
-          m.len = 4 + Math.random() * 6;
-        }
-        const i6 = i * 6;
-        this.linePos[i6] = m.x; this.linePos[i6 + 1] = m.y; this.linePos[i6 + 2] = m.z;
-        this.linePos[i6 + 3] = m.x; this.linePos[i6 + 4] = m.y; this.linePos[i6 + 5] = m.z + m.len;
-      }
-      this.speedLines.geometry.attributes.position.needsUpdate = true;
-    }
   }
 }

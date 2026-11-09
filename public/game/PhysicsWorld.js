@@ -75,6 +75,14 @@ export class PhysicsWorld {
       collisionFilterGroup: group,
     });
     body.position.set(position.x, position.y, position.z);
+    // CRITICAL: refresh the world AABB at its final position. cannon-es
+    // computes a static body's AABB once (at construction, i.e. at the
+    // ORIGIN) and SAPBroadphase.aabbQuery — which World.raycastClosest
+    // uses — then tests that stale box. Without this, every downward
+    // grounded raycast silently misses once the player leaves the spawn
+    // area (~25 m): no more ground jumps, the run feels dead. This one
+    // line is what keeps SPACE working forever.
+    body.updateAABB();
     body.userData = { kind, ...userData };
     this.world.addBody(body);
     return body;
@@ -85,6 +93,7 @@ export class PhysicsWorld {
     const shape = new CANNON.Cylinder(radius, radius, height, 12);
     const body = new CANNON.Body({ mass: 0, material, shape, collisionFilterGroup: GROUP_WORLD });
     body.position.set(position.x, position.y, position.z);
+    body.updateAABB(); // same stale-AABB fix as addStaticBox
     body.userData = { kind, ...userData };
     this.world.addBody(body);
     return body;
@@ -104,6 +113,18 @@ export class PhysicsWorld {
       collisionFilterMask: GROUP_WORLD,
       skipBackfaces: true,
     }, this._rayResult);
+    if (this._rayResult.hasHit) return this._rayResult;
+    // Belt & braces: the SAP broadphase AABB query can still miss a body
+    // whose AABB went stale after a runtime move (patrol monkeys, juicer
+    // arms). Re-test against every world body directly — 30-ish bodies,
+    // so this fallback costs nothing and guarantees the grounded check
+    // can NEVER lie (a lying grounded check is what killed the jump).
+    const ray = this._fallbackRay || (this._fallbackRay = new CANNON.Ray());
+    ray.from.copy(from);
+    ray.to.copy(to);
+    ray.collisionFilterMask = GROUP_WORLD;
+    ray.skipBackfaces = true;
+    ray.intersectBodies(this.world.bodies.filter((b) => b.collisionFilterGroup & GROUP_WORLD), this._rayResult);
     return this._rayResult.hasHit ? this._rayResult : null;
   }
 

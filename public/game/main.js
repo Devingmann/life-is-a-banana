@@ -35,7 +35,6 @@ class Game {
     this.envTime = 0;
     this.fov = 72;
     this.camRoll = 0;
-    this.bloomPulse = 0;
     this._lastT = performance.now();
     this._quality = 2;      // adaptive quality steps (2 = full)
     this._fpsAcc = 0;
@@ -101,11 +100,13 @@ class Game {
     const rt = new THREE.WebGLRenderTarget(w, h, { samples: 2, type: THREE.HalfFloatType });
     this.composer = new EffectComposer(this.renderer, rt);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    // Calm glow: high threshold (only true highlights bloom) + low strength +
-    // tight radius. Collecting stars / super mode used to stack bloom up to
-    // ~1.8 and wash the whole screen white — now the target is hard-clamped
-    // in _updateEffects as well, so it can NEVER blow out again.
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.32, 0.38, 0.92);
+    // GLOW POLICY — the bloom is a CONSTANT: low strength, high threshold,
+    // tight radius. Only the genuine neon of the scenery (the additive
+    // synthwave sun and the brightest sky) ever crosses the threshold.
+    // Collectibles, missiles, the banana and every speed / turbo / super
+    // feedback stay deliberately far below it, and the strength NEVER
+    // reacts to gameplay — so the screen can not white out, ever.
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.3, 0.35, 0.9);
     this.composer.addPass(this.bloom);
     this.rgbPass = new ShaderPass(RGBShiftShader);
     this.rgbPass.uniforms.amount.value = 0.0006;
@@ -151,7 +152,6 @@ class Game {
     this._bindResize();
     this.camera.position.set(10, 5.5, 7);
     this.camera.lookAt(0, 1.2, 0);
-    this.particles.resetSpeedLines(0);
     requestAnimationFrame((t) => this._loop(t));
   }
 
@@ -394,7 +394,7 @@ class Game {
         const f = document.getElementById('flash-overlay');
         if (f) { f.classList.remove('red'); void f.offsetWidth; f.classList.add('red'); }
       } else if (ev.type === 'zoneflash') {
-        this.bloomPulse = 0.4;
+        // zone change = CSS tint flash only — bloom strength never moves
         const f = document.getElementById('flash-overlay');
         if (f) { f.classList.remove('zone'); void f.offsetWidth; f.classList.add('zone'); }
       }
@@ -435,6 +435,13 @@ class Game {
             count: 16, speed: 5.5, size: 10, life: 0.42, gravity: -1, upBias: 0.4,
             colors: [0xd8c9ff, 0x00ffa3, 0xffffff],
           });
+        },
+        // jump pressed with an empty endurance meter: dry-click feedback +
+        // the HUD bar flashes red — the reason is always visible.
+        onJumpDenied: () => {
+          this.sound.sfxEmpty();
+          const bar = document.getElementById('e-fill');
+          if (bar) { bar.classList.remove('deny'); void bar.offsetWidth; bar.classList.add('deny'); }
         },
         onDiveLand: () => {
           this.sound.sfxDiveLand();
@@ -498,11 +505,7 @@ class Game {
       this.keyLight.target.updateMatrixWorld();
     }
 
-    this.particles.update(dt, {
-      playerZ: this.player.position.z,
-      speed: this.player.speed,
-      boostFactor: Math.min(1, this.logic.boostFactor + (this.logic.superActive ? 1 : 0) + (this.logic.padActive ? 0.55 : 0)),
-    });
+    this.particles.update(dt);
 
     this._updateCamera(rawDt);
     this._updateEffects(rawDt);
@@ -577,7 +580,8 @@ class Game {
   }
 
   _updateEffects(dt) {
-    // FOV kick during boost / super / speed pads — widens with raw speed too
+    // FOV kick during boost / super / speed pads — widens with raw speed too.
+    // Speed FEEL comes from the lens and the world, never from glow.
     const pad = this.logic.padActive ? 1 : 0;
     const fovTarget = 72
       + Math.max(0, this.player.speed - 24) * 0.14
@@ -589,18 +593,13 @@ class Game {
       this.camera.fov = this.fov;
       this.camera.updateProjectionMatrix();
     }
-    // bloom breathing (kept subtle: super mode should pop, not blind).
-    // Hard cap at 0.62: the old formula could stack boost + super + zone
-    // pulse up to ~1.8 and turn the screen pure white after a star streak.
-    this.bloomPulse = Math.max(0, this.bloomPulse - dt * 1.6);
-    const bloomTarget = Math.min(
-      0.62,
-      0.34 + this.logic.boostFactor * 0.10 + this.player.superT * 0.22 + this.bloomPulse * 0.8
-    );
-    this.bloom.strength += (bloomTarget - this.bloom.strength) * Math.min(1, dt * 4);
-    // chromatic aberration
+    // NO SPEED GLOW: bloom strength is a hard constant (see _initPostFX) and
+    // is deliberately never touched here, whatever the speed / mode / star
+    // streak. The only speed-reactive post effect left is a light CRT-style
+    // chromatic fringe while boosting — colour separation, not brightness,
+    // so it physically cannot wash the screen out.
     this.rgbPulse = Math.max(0, this.rgbPulse - dt * 0.006);
-    const rgbTarget = 0.0006 + this.logic.boostFactor * 0.0026 + this.player.superT * 0.0014 + this.rgbPulse;
+    const rgbTarget = 0.0005 + this.logic.boostFactor * 0.0011 + this.rgbPulse;
     this.rgbPass.uniforms.amount.value += (rgbTarget - this.rgbPass.uniforms.amount.value) * Math.min(1, dt * 7);
   }
 }
